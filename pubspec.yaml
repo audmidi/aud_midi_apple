@@ -1,6 +1,6 @@
 name: aud_midi_apple
 description: "CoreMIDI, CoreBluetooth and network session backend for aud_midi on macOS and iOS"
-version: 0.1.0
+version: 0.1.1
 homepage: https://github.com/audmidi/aud_midi_apple
 repository: https://github.com/audmidi/aud_midi_apple
 topics:

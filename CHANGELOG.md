@@ -23,14 +23,24 @@
 - Add review fixes of ticket 26
 
 - README.de.md carries the native-tap additions of README.md
+
 - Both READMEs document showSystemDevicePicker, activateInterval, bluetoothPicker and showMidiBluetoothPickerNative
+
 - The USB offline and hot-plug path verified on the iPhone 16 Pro Max with a Roland GO:KEYS
+
 - Bluetooth names match exactly first, then by prefix, by content only from three characters on
+
 - stop() detaches the taps through detachNativeTap, so a leaked slot reports a diagnostic
+
 - attachNativeTap resolves its target in _tapTarget and throws once
+
 - aud_midi_apple_timebase reads the cached timebase; check-notices.js compares file URLs and uses node: imports
+
 - test/native/aud_midi_apple_tap_test.dart runs scripts/test-native.js
+
 - aud_midi_core ^0.2.0
+
+- Add independent constraints on the aud_midi packages
 
 ## 0.1.0 - 2026-10-07
 

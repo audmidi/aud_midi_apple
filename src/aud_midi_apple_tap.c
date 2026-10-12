@@ -234,8 +234,13 @@ AudMidiAppleTapSlot *aud_midi_apple_taps_enter(AudMidiAppleTapTable *table,
   if (atomic_load(&table->attached) == 0) return NULL;
   for (int i = 0; i < AUD_MIDI_APPLE_TAP_SLOTS; i++) {
     struct AudMidiAppleTapSlot *slot = &table->slots[i];
-    if (atomic_load(&slot->ref_con) != ref_con) continue;
-    if (!enter(slot, ref_con)) return NULL;
+    // A leaked or closing slot keeps its ref con; the active slot of the
+    // ref con may come after it.
+    if (atomic_load(&slot->state) != SLOT_ACTIVE ||
+        atomic_load(&slot->ref_con) != ref_con) {
+      continue;
+    }
+    if (!enter(slot, ref_con)) continue;
     *ring_out = atomic_load(&slot->ring);
     if (atomic_exchange(&slot->busy, 1) != 0) {
       atomic_fetch_add(&slot->dropped, packets);
@@ -269,7 +274,10 @@ static int32_t report_gone(AudMidiAppleTapTable *table, uint32_t source,
   if (atomic_load(&table->attached) == 0) return 0;
   for (int i = 0; i < AUD_MIDI_APPLE_TAP_SLOTS; i++) {
     struct AudMidiAppleTapSlot *slot = &table->slots[i];
-    if (atomic_load(&slot->source) != source) continue;
+    if (atomic_load(&slot->state) != SLOT_ACTIVE ||
+        atomic_load(&slot->source) != source) {
+      continue;
+    }
     const uint32_t ref_con = atomic_load(&slot->ref_con);
     if (ref_con == 0 || !enter(slot, ref_con)) continue;
     if (!once || atomic_exchange(&slot->gone, 1) == 0) {

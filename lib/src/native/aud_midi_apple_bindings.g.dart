@@ -478,6 +478,14 @@ external void aud_midi_apple_service_unregister(
   ffi.Pointer<AudMidiAppleService> service,
 );
 
+/// Presents Apple's Bluetooth MIDI device picker
+/// (CABTMIDICentralViewController) with a Done button on the main thread of
+/// iOS; calls [done] with 0 once it is dismissed, or with
+/// AUD_MIDI_APPLE_UNSUPPORTED_ERROR when no view controller can present it.
+/// Returns 0, or AUD_MIDI_APPLE_UNSUPPORTED_ERROR at once on macOS.
+@ffi.Native<ffi.Int32 Function(AudMidiAppleSignal)>()
+external int aud_midi_apple_show_bluetooth_picker(AudMidiAppleSignal done);
+
 /// Returns the number of packets dropped because the ring buffer was full
 /// since the last call, and resets it.
 @ffi.Native<ffi.Uint64 Function(ffi.Pointer<AudMidiAppleClient>)>(isLeaf: true)

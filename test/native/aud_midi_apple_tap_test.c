@@ -237,6 +237,54 @@ static void test_a_contended_call_drops_and_counts(void) {
   (void)words;
 }
 
+// A detach that timed out leaves the ref con in the leaked slot. A later
+// attach of the same ref con lands in another slot, and both the receive
+// and the notification thread must find that one, not stop at the leaked
+// slot in front of it.
+static void test_a_leaked_slot_does_not_hide_the_new_tap(void) {
+  atomic_store(&busy_entered, 0);
+  atomic_store(&busy_release, 0);
+  const int gone_before = atomic_load(&blocking_gone);
+  busy_table = aud_midi_apple_taps_create();
+  CHECK(aud_midi_apple_taps_attach(busy_table, 1, 11, blocking_tap, NULL, 1) ==
+        0);
+  pthread_t thread;
+  pthread_create(&thread, NULL, deliver_once, NULL);
+  while (!atomic_load(&busy_entered)) sleep_ms(1);
+  CHECK(aud_midi_apple_taps_detach(busy_table, 1, 20) ==
+        AUD_MIDI_APPLE_TIMEOUT_ERROR);
+  CHECK(aud_midi_apple_taps_count(busy_table) == 1);
+  // The same ref con and source again: a second slot behind the leaked one.
+  AudMidiAppleProbe *probe = aud_midi_apple_probe_create();
+  CHECK(aud_midi_apple_taps_attach(busy_table, 1, 11,
+                                   aud_midi_apple_probe_function(), probe,
+                                   0) == 0);
+  CHECK(aud_midi_apple_taps_count(busy_table) == 2);
+  // Data reaches the new tap, the ring flag is the new slot's.
+  const uint32_t note_on[2] = {0x40903c00, 0xc8000000};
+  int32_t ring = 1;
+  CHECK(deliver(busy_table, 1, note_on, 2, 8, &ring) == 1);
+  CHECK(ring == 0);
+  CHECK(value(probe, UMP_CALLS) == 1);
+  CHECK(value(probe, LAST_TIME) == 8);
+  CHECK(aud_midi_apple_taps_take_dropped(busy_table, 1) == 0);
+  // GONE reaches the new tap only; the leaked tap is not called again.
+  CHECK(aud_midi_apple_taps_source_gone(busy_table, 11, 9) == 1);
+  CHECK(value(probe, GONE_CALLS) == 1);
+  CHECK(value(probe, LAST_TIME) == 9);
+  CHECK(atomic_load(&blocking_gone) == gone_before);
+  // The new slot detaches cleanly, the leaked one stays.
+  atomic_store(&busy_release, 1);
+  pthread_join(thread, NULL);
+  CHECK(aud_midi_apple_taps_detach(busy_table, 1, 100) == 0);
+  CHECK(aud_midi_apple_taps_count(busy_table) == 1);
+  CHECK(deliver(busy_table, 1, note_on, 2, 10, &ring) == 0);
+  CHECK(ring == 1);
+  CHECK(value(probe, UMP_CALLS) == 1);
+  CHECK(aud_midi_apple_taps_free(busy_table) == AUD_MIDI_APPLE_PARAM_ERROR);
+  aud_midi_apple_probe_free(probe);
+}
+
 // #############################################################################
 // Threads
 
@@ -371,8 +419,9 @@ int main(void) {
   test_detach_waits_for_the_calls_in_flight();
   test_ticks_convert_without_overflow();
   test_receive_path_is_nonblocking();
-  // Last: it leaks a slot on purpose.
+  // Last: they leak a slot on purpose.
   test_a_contended_call_drops_and_counts();
+  test_a_leaked_slot_does_not_hide_the_new_tap();
   if (failures != 0) {
     fprintf(stderr, "%d checks failed\n", failures);
     return 1;

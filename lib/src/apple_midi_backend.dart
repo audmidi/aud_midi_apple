@@ -11,6 +11,7 @@ import 'package:aud_midi_standard/aud_midi_standard.dart';
 
 import 'bluetooth/midi_apple_bluetooth_backend.dart';
 import 'bluetooth/midi_core_bluetooth.dart';
+import 'bluetooth/midi_bluetooth_picker_native.dart';
 import 'bluetooth/midi_core_bluetooth_native.dart';
 import 'core_midi/midi_core_midi.dart';
 import 'core_midi/midi_core_midi_native.dart';
@@ -52,6 +53,7 @@ final class AppleMidiBackend
   /// - [resyncInterval] how often the mach clock is mapped to the package
   ///   clock again.
   /// - [bluetoothTimeout] how long Bluetooth waits for its power state.
+  /// - [bluetoothPicker] shows the Bluetooth MIDI device picker of iOS.
   AppleMidiBackend({
     MidiCoreMidi? coreMidi,
     this._coreBluetooth,
@@ -60,6 +62,7 @@ final class AppleMidiBackend
     this.clientName = 'aud_midi',
     this.resyncInterval = const Duration(seconds: 10),
     this.bluetoothTimeout = const Duration(seconds: 5),
+    this._bluetoothPicker,
   }) : _coreMidi = coreMidi ?? MidiCoreMidiNative();
 
   // ...........................................................................
@@ -366,6 +369,7 @@ final class AppleMidiBackend
   // ...........................................................................
   final MidiCoreMidi _coreMidi;
   final MidiCoreBluetooth? _coreBluetooth;
+  final Future<void> Function()? _bluetoothPicker;
   final MidiAppleNetworkSession? _networkSession;
   final MidiBonjourBrowser Function()? _bonjourBrowser;
 
@@ -563,6 +567,7 @@ final class AppleMidiBackend
       disconnectDriver: _coreMidi.disconnectBluetooth,
       waitForPorts: _waitForBluetoothPorts,
       readyTimeout: bluetoothTimeout,
+      showPicker: _bluetoothPicker ?? showMidiBluetoothPickerNative,
     );
   }
 
@@ -595,9 +600,10 @@ final class AppleMidiBackend
       timeout,
       onTimeout: () {
         _bluetoothWaiters.remove(waiter);
-        throw const MidiNativeError(
-          api: 'MIDIBluetoothDriverActivateAllConnections',
-          code: _objectNotFound,
+        final device = name.isEmpty ? '' : '"$name" ';
+        throw MidiTimeout(
+          'The CoreMIDI Bluetooth device ${device}did not appear',
+          timeout,
         );
       },
     );
@@ -610,13 +616,21 @@ final class AppleMidiBackend
         for (final device in _setup.devices)
           if (device.transport == MidiTransport.bluetoothLe &&
               !device.isOffline &&
-              (waiter.name.isEmpty || device.name == waiter.name))
+              _sameName(device.name, waiter.name))
             for (final port in device.ports) _setup.portOf(port)!,
       ];
       if (ports.isEmpty) continue;
       _bluetoothWaiters.remove(waiter);
       waiter.completer.complete(ports);
     }
+  }
+
+  /// Whether the CoreMIDI device [device] is the peripheral [wanted]; the
+  /// advertised name and the CoreMIDI name may differ by a suffix.
+  static bool _sameName(String device, String wanted) {
+    final a = device.trim().toLowerCase();
+    final b = wanted.trim().toLowerCase();
+    return b.isEmpty || (a.isNotEmpty && (a.contains(b) || b.contains(a)));
   }
 
   /// Runs [call] and ignores its native error; used while tearing down.
@@ -627,7 +641,4 @@ final class AppleMidiBackend
       // The endpoint is gone already.
     }
   }
-
-  /// `kMIDIObjectNotFound`.
-  static const int _objectNotFound = -10842;
 }

@@ -734,7 +734,81 @@ void main() {
             'p1',
             timeout: const Duration(milliseconds: 30),
           ),
-          throwsA(isA<MidiNativeError>().having((e) => e.code, 'code', -10842)),
+          throwsA(
+            isA<MidiTimeout>().having(
+              (e) => e.what,
+              'what',
+              'The CoreMIDI Bluetooth device did not appear',
+            ),
+          ),
+        );
+      });
+
+      test('names the device that did not appear', () async {
+        central.replyName = 'Keys';
+        await expectLater(
+          backend.bluetooth!.connect(
+            'p1',
+            timeout: const Duration(milliseconds: 30),
+          ),
+          throwsA(
+            isA<MidiTimeout>().having(
+              (e) => e.what,
+              'what',
+              'The CoreMIDI Bluetooth device "Keys" did not appear',
+            ),
+          ),
+        );
+      });
+
+      test('matches a CoreMIDI name that differs by a suffix', () async {
+        central.replyName = 'GO:KEYS';
+        final connecting = backend.bluetooth!.connect(
+          'p1',
+          timeout: const Duration(seconds: 2),
+        );
+        await pumpEventQueue();
+        coreMidi.setup = snapshot(
+          devices: [
+            device(
+              8,
+              name: '',
+              driverOwner: bluetooth,
+              sources: [endpoint(81, name: 'Unnamed', driverOwner: bluetooth)],
+            ),
+            device(
+              9,
+              name: 'go:keys MIDI',
+              driverOwner: bluetooth,
+              sources: [endpoint(91, name: 'Keys', driverOwner: bluetooth)],
+            ),
+          ],
+        );
+        notify(MidiCoreMidi.objectAdded);
+        expect((await connecting).single.name, 'Keys');
+      });
+
+      test('shows the device picker', () async {
+        var shown = 0;
+        final picking = AppleMidiBackend(
+          coreMidi: coreMidi,
+          coreBluetooth: central,
+          bluetoothPicker: () async => shown++,
+        );
+        final picker = picking.bluetooth! as MidiBluetoothSystemPicker;
+        await picker.showSystemDevicePicker();
+        expect(shown, 1);
+      });
+
+      test('has no native device picker on macOS', () async {
+        final native = AppleMidiBackend(
+          coreMidi: coreMidi,
+          coreBluetooth: central,
+        );
+        final picker = native.bluetooth! as MidiBluetoothSystemPicker;
+        await expectLater(
+          picker.showSystemDevicePicker(),
+          throwsA(isA<MidiUnsupported>()),
         );
       });
 

@@ -287,10 +287,67 @@ void main() {
       });
     });
 
-    group('central, readyTimeout', () {
+    group('central, readyTimeout, activateInterval', () {
       test('keep the dependencies', () {
         expect(backend.central, same(central));
         expect(backend.readyTimeout, const Duration(milliseconds: 50));
+        expect(backend.activateInterval, const Duration(seconds: 1));
+      });
+    });
+
+    group('connect() while the user pairs', () {
+      test('repeats the activation until the ports appear', () async {
+        var activations = 0;
+        final pairing = MidiAppleBluetoothBackend(
+          central: central,
+          activate: () {
+            activations++;
+            if (activations == 2) {
+              throw const MidiNativeError(api: 'x', code: 1);
+            }
+          },
+          disconnectDriver: (_) {},
+          waitForPorts: ({required name, required timeout}) async {
+            await Future<void>.delayed(const Duration(milliseconds: 40));
+            return [port];
+          },
+          readyTimeout: const Duration(milliseconds: 50),
+          activateInterval: const Duration(milliseconds: 5),
+        );
+        central.connectReply = MidiCoreBluetooth.connected;
+        expect(await pairing.connect('p1'), equals([port]));
+        expect(activations, greaterThan(2));
+        final after = activations;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(activations, after);
+        pairing.close();
+      });
+    });
+
+    group('showSystemDevicePicker()', () {
+      test('shows the picker of the operating system', () async {
+        var shown = 0;
+        final picking = MidiAppleBluetoothBackend(
+          central: central,
+          activate: () {},
+          disconnectDriver: (_) {},
+          waitForPorts: waitForPorts,
+          showPicker: () async => shown++,
+        );
+        await picking.showSystemDevicePicker();
+        expect(shown, 1);
+        central.denied = true;
+        await expectLater(
+          picking.showSystemDevicePicker(),
+          throwsA(isA<MidiPermissionDenied>()),
+        );
+      });
+
+      test('throws without a picker', () async {
+        await expectLater(
+          backend.showSystemDevicePicker(),
+          throwsA(isA<MidiUnsupported>()),
+        );
       });
     });
   });

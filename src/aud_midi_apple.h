@@ -169,6 +169,13 @@ int32_t aud_midi_apple_bluetooth_activate_all(void);
 /// AUD_MIDI_APPLE_UNSUPPORTED_ERROR before macOS 13 and iOS 16.
 int32_t aud_midi_apple_bluetooth_disconnect(const char *uuid);
 
+/// Presents Apple's Bluetooth MIDI device picker
+/// (CABTMIDICentralViewController) with a Done button on the main thread of
+/// iOS; calls [done] with 0 once it is dismissed, or with
+/// AUD_MIDI_APPLE_UNSUPPORTED_ERROR when no view controller can present it.
+/// Returns 0, or AUD_MIDI_APPLE_UNSUPPORTED_ERROR at once on macOS.
+int32_t aud_midi_apple_show_bluetooth_picker(AudMidiAppleSignal done);
+
 /// The browse event of a resolved service: name, host and port.
 #define AUD_MIDI_APPLE_BROWSE_FOUND 1
 

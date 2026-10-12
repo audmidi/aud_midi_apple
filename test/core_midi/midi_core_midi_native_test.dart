@@ -8,11 +8,63 @@
 library;
 
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:typed_data';
 
 import 'package:aud_midi_apple/aud_midi_apple.dart';
+import 'package:aud_midi_apple/src/native/aud_midi_apple_bindings.g.dart'
+    as native;
 import 'package:aud_midi_core/aud_midi_core.dart';
+import 'package:ffi/ffi.dart';
 import 'package:test/test.dart';
+
+// #############################################################################
+/// The probe tap of the shim, read from Dart: UMP calls, byte calls, gone
+/// calls, words, bytes, the last time, the sum, the first word, overlaps
+/// and the smallest delay.
+final class _Probe {
+  _Probe()
+    : pointer = native.aud_midi_apple_probe_create(),
+      _values = calloc<Int64>(native.AUD_MIDI_APPLE_PROBE_VALUES);
+
+  final Pointer<native.AudMidiAppleProbe> pointer;
+  final Pointer<Int64> _values;
+
+  MidiNativeTap get tap => MidiNativeTap(
+    function: native.aud_midi_apple_probe_function().address,
+    user: pointer.address,
+  );
+
+  List<int> read() {
+    native.aud_midi_apple_probe_read(
+      pointer,
+      _values,
+      native.AUD_MIDI_APPLE_PROBE_VALUES,
+    );
+    return _values.asTypedList(native.AUD_MIDI_APPLE_PROBE_VALUES).toList();
+  }
+
+  int get umpCalls => read()[0];
+  int get goneCalls => read()[2];
+  int get words => read()[3];
+  int get lastTimeNs => read()[5];
+  int get sum => read()[6];
+  int get first => read()[7];
+  int get minDelayNs => read()[9];
+
+  /// Waits up to two seconds until [done] holds.
+  Future<void> until(bool Function() done) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (!done() && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
+
+  void free() {
+    native.aud_midi_apple_probe_free(pointer);
+    calloc.free(_values);
+  }
+}
 
 void main() {
   late MidiCoreMidiNative a;
@@ -382,6 +434,105 @@ void main() {
         expect(a.now(), greaterThanOrEqualTo(first));
         expect(a.timebase.numer, greaterThan(0));
         expect(a.timebase.denom, greaterThan(0));
+      });
+    });
+
+    group('attachTap, detachTap, setTapRing, setTapSource', () {
+      late _Probe probe;
+
+      setUp(() => probe = _Probe());
+
+      tearDown(() => probe.free());
+
+      test('call the tap per packet with nanosecond timestamps', () async {
+        final source = a.createSource(name: 'aud tap src', protocol: 2);
+        b
+          ..connectSource(source, protocol: 2, refCon: 7)
+          ..attachTap(refCon: 7, source: source, tap: probe.tap, ring: false);
+        final sent = words([0x40903c00, 0xc8000000, 0x40803c00, 0x00000000]);
+        final stamp = b.now();
+        // CoreMIDI merges UMPs with one timestamp into one MIDIEventPacket.
+        a.emit(source, protocol: 2, timestamp: stamp, words: sent);
+        await probe.until(() => probe.words >= 4);
+        expect(probe.umpCalls, inInclusiveRange(1, 2));
+        expect(probe.words, 4);
+        expect(probe.sum, sent.fold<int>(0, (a, b) => a + b));
+        expect(probe.first, anyOf(0x40903c00, 0x40803c00));
+        expect(probe.lastTimeNs, native.aud_midi_apple_ticks_to_ns(stamp));
+        expect(probe.minDelayNs, greaterThanOrEqualTo(0));
+        // Without the ring, Dart gets nothing; with it, both get the data.
+        expect(await packetsOf(b), isEmpty);
+        b.setTapRing(7, ring: true);
+        a.emit(source, protocol: 2, timestamp: 0, words: sent);
+        expect(await packetsOf(b), isNotEmpty);
+        await probe.until(() => probe.words >= 8);
+        expect(probe.words, 8);
+        expect(
+          probe.lastTimeNs,
+          greaterThan(native.aud_midi_apple_ticks_to_ns(stamp)),
+        );
+        final calls = probe.umpCalls;
+        expect(b.detachTap(7), isTrue);
+        a.emit(source, protocol: 2, timestamp: 0, words: sent);
+        expect(await packetsOf(b), isNotEmpty);
+        expect(probe.umpCalls, calls);
+      });
+
+      test('report gone when the source is disposed', () async {
+        final source = a.createSource(name: 'aud tap gone', protocol: 1);
+        b
+          ..connectSource(source, protocol: 1, refCon: 8)
+          ..attachTap(refCon: 8, source: source, tap: probe.tap, ring: false);
+        final before = native.aud_midi_apple_ticks_to_ns(b.now());
+        a.disposeEndpoint(source);
+        await probe.until(() => probe.goneCalls >= 1);
+        expect(probe.goneCalls, 1);
+        expect(probe.lastTimeNs, greaterThanOrEqualTo(before));
+        // The tap survives; a new source under the ref con reports again.
+        final again = a.createSource(name: 'aud tap gone', protocol: 1);
+        b
+          ..connectSource(again, protocol: 1, refCon: 8)
+          ..setTapSource(8, again);
+        a.disposeEndpoint(again);
+        await probe.until(() => probe.goneCalls >= 2);
+        expect(probe.goneCalls, 2);
+        expect(b.detachTap(8), isTrue);
+      });
+
+      test('refuse a second tap and a stale detach', () {
+        final source = a.createSource(name: 'aud tap twice', protocol: 1);
+        b
+          ..connectSource(source, protocol: 1, refCon: 9)
+          ..attachTap(refCon: 9, source: source, tap: probe.tap, ring: true);
+        expect(
+          () => b.attachTap(
+            refCon: 9,
+            source: source,
+            tap: probe.tap,
+            ring: true,
+          ),
+          throwsA(nativeError('aud_midi_apple_tap_attach')),
+        );
+        expect(b.detachTap(9), isTrue);
+        expect(b.detachTap(9), isFalse);
+        b.setTapRing(9, ring: false);
+        b.setTapSource(9, source);
+      });
+    });
+
+    group('aud_midi_apple_ticks_to_ns', () {
+      test('converts with the timebase of the process', () {
+        final timebase = a.timebase;
+        expect(native.aud_midi_apple_ticks_to_ns(0), 0);
+        expect(
+          native.aud_midi_apple_ticks_to_ns(timebase.denom * 1000),
+          timebase.numer * 1000,
+        );
+        final now = a.now();
+        expect(
+          native.aud_midi_apple_ticks_to_ns(now) ~/ 1000,
+          closeTo(timebase.toMicros(now), 1),
+        );
       });
     });
   });

@@ -410,6 +410,184 @@ void main() {
       });
     });
 
+    group('supportsNativeTap, attachNativeTap, detachNativeTap', () {
+      const tap = MidiNativeTap(function: 0x10, user: 0x20);
+
+      test('connect the source for the tap alone', () async {
+        expect(backend.supportsNativeTap(keysInId), isTrue);
+        expect(backend.supportsNativeTap(keysOutId), isFalse);
+        expect(
+          backend.supportsNativeTap(const MidiPortId('coremidi:1')),
+          isFalse,
+        );
+        await backend.attachNativeTap(keysInId, tap);
+        expect(
+          coreMidi.calls,
+          equals(['connect 11 1 1', 'attachTap 1 11 16 32 false']),
+        );
+        expect(coreMidi.taps, {1: tap});
+        // Packets of a tapped source without a listener stay with the tap.
+        coreMidi.packets.add(_packet(1, 2000));
+        signal(MidiCoreMidi.packetsSignal);
+        expect(host.packets, isEmpty);
+        coreMidi.calls.clear();
+        await backend.detachNativeTap(keysInId);
+        await backend.detachNativeTap(keysInId);
+        expect(coreMidi.calls, equals(['detachTap 1', 'disconnect 11 1']));
+        expect(coreMidi.taps, isEmpty);
+      });
+
+      test('share the source with a listener', () async {
+        await backend.openPort(keysInId);
+        coreMidi.calls.clear();
+        await backend.attachNativeTap(keysInId, tap);
+        expect(coreMidi.calls, equals(['attachTap 1 11 16 32 true']));
+        coreMidi.calls.clear();
+        await backend.closePort(keysInId);
+        expect(coreMidi.calls, equals(['setTapRing 1 false']));
+        coreMidi.calls.clear();
+        await backend.openPort(keysInId);
+        expect(coreMidi.calls, equals(['setTapRing 1 true']));
+        coreMidi.packets.add(_packet(1, 2000));
+        signal(MidiCoreMidi.packetsSignal);
+        expect(host.packets.single.port, keysInId);
+        coreMidi.calls.clear();
+        await backend.detachNativeTap(keysInId);
+        expect(coreMidi.calls, equals(['detachTap 1']));
+        await backend.closePort(keysInId);
+        expect(coreMidi.calls, equals(['detachTap 1', 'disconnect 11 1']));
+      });
+
+      test('tap own destinations', () async {
+        final port = await backend.create(
+          MidiVirtualPortSpec(name: 'Own In', direction: MidiDirection.input),
+        );
+        final source = await backend.create(
+          MidiVirtualPortSpec(name: 'Own Out', direction: MidiDirection.output),
+        );
+        expect(backend.supportsNativeTap(port.id), isTrue);
+        expect(backend.supportsNativeTap(source.id), isFalse);
+        coreMidi.calls.clear();
+        await backend.attachNativeTap(port.id, tap);
+        expect(coreMidi.calls, equals(['attachTap 1 500 16 32 false']));
+        await backend.openPort(port.id);
+        await backend.closePort(port.id);
+        await backend.detachNativeTap(port.id);
+        expect(
+          coreMidi.calls,
+          equals([
+            'attachTap 1 500 16 32 false',
+            'setTapRing 1 true',
+            'setTapRing 1 false',
+            'detachTap 1',
+          ]),
+        );
+        await expectLater(
+          backend.attachNativeTap(source.id, tap),
+          throwsA(isA<ArgumentError>()),
+        );
+        await backend.detachNativeTap(source.id);
+      });
+
+      test('throw for unknown ports, outputs and a second tap', () async {
+        const unknown = MidiPortId('coremidi:1');
+        await expectLater(
+          backend.attachNativeTap(unknown, tap),
+          throwsA(isA<MidiPortGone>()),
+        );
+        await expectLater(
+          backend.detachNativeTap(unknown),
+          throwsA(isA<MidiPortGone>()),
+        );
+        await expectLater(
+          backend.attachNativeTap(keysOutId, tap),
+          throwsA(isA<ArgumentError>()),
+        );
+        await backend.detachNativeTap(keysOutId);
+        await backend.attachNativeTap(keysInId, tap);
+        await expectLater(
+          backend.attachNativeTap(keysInId, tap),
+          throwsA(isA<StateError>()),
+        );
+      });
+
+      test('disconnect again when the shim refuses the tap', () async {
+        coreMidi.failures['aud_midi_apple_tap_attach'] = -2;
+        await expectLater(
+          backend.attachNativeTap(keysInId, tap),
+          throwsA(isA<MidiNativeError>()),
+        );
+        expect(coreMidi.calls.last, 'disconnect 11 1');
+        await backend.openPort(keysInId);
+        coreMidi.failures['aud_midi_apple_tap_attach'] = -2;
+        coreMidi.calls.clear();
+        await expectLater(
+          backend.attachNativeTap(keysInId, tap),
+          throwsA(isA<MidiNativeError>()),
+        );
+        // The source was connected again, with the next ref con.
+        expect(coreMidi.calls, equals(['attachTap 2 11 16 32 true']));
+      });
+
+      test('report a tap that did not return', () async {
+        await backend.attachNativeTap(keysInId, tap);
+        coreMidi.tapLeaks = true;
+        await backend.detachNativeTap(keysInId);
+        expect(host.diagnostics.single.port, keysInId);
+        expect(host.diagnostics.single.cause, contains('leaks'));
+      });
+
+      test('survive the source and follow it to a new endpoint', () async {
+        await backend.attachNativeTap(keysInId, tap);
+        coreMidi
+          ..calls.clear()
+          ..setup = (devices: [], sources: [], destinations: []);
+        backend.refresh();
+        expect(coreMidi.calls, isEmpty);
+        expect(backend.supportsNativeTap(keysInId), isFalse);
+        const moved = (
+          ref: 41,
+          uniqueId: 110,
+          name: 'Keys In',
+          displayName: 'Keys In',
+          manufacturer: 'Maker',
+          model: 'Model',
+          driverOwner: '',
+          isOffline: false,
+          isPrivate: false,
+          protocol: 1,
+          groupBitmap: null,
+        );
+        coreMidi.setup = (devices: [], sources: [moved], destinations: []);
+        backend.refresh();
+        expect(
+          coreMidi.calls,
+          equals(['disconnect 11 1', 'connect 41 1 1', 'setTapSource 1 41']),
+        );
+        coreMidi
+          ..calls.clear()
+          ..setup = (devices: [], sources: [], destinations: []);
+        backend.refresh();
+        // The tap of a vanished port can still be detached.
+        await backend.detachNativeTap(keysInId);
+        expect(coreMidi.calls, equals(['detachTap 1', 'disconnect 41 1']));
+      });
+
+      test('leave on stop', () async {
+        await backend.attachNativeTap(keysInId, tap);
+        coreMidi.calls.clear();
+        await backend.stop();
+        expect(
+          coreMidi.calls,
+          equals(['detachTap 1', 'disconnect 11 1', 'close']),
+        );
+        await expectLater(
+          backend.attachNativeTap(keysInId, tap),
+          throwsA(isA<StateError>()),
+        );
+      });
+    });
+
     group('refresh()', () {
       test('reconnects open inputs whose endpoint changed', () async {
         await backend.openPort(keysInId);
@@ -632,6 +810,8 @@ final class _FakeCoreMidi implements MidiCoreMidi {
   final notifications = <MidiCoreMidiNotification>[];
   final failures = <String, int>{};
   final uniqueIds = <int, int>{};
+  final taps = <int, MidiNativeTap>{};
+  bool tapLeaks = false;
   int dropped = 0;
   int _nextEndpoint = 500;
   void Function()? onActivate;
@@ -722,6 +902,33 @@ final class _FakeCoreMidi implements MidiCoreMidi {
     calls.add('dispose $endpoint');
     _check('MIDIEndpointDispose');
   }
+
+  @override
+  void attachTap({
+    required int refCon,
+    required int source,
+    required MidiNativeTap tap,
+    required bool ring,
+  }) {
+    calls.add('attachTap $refCon $source ${tap.function} ${tap.user} $ring');
+    _check('aud_midi_apple_tap_attach');
+    taps[refCon] = tap;
+  }
+
+  @override
+  bool detachTap(int refCon) {
+    calls.add('detachTap $refCon');
+    taps.remove(refCon);
+    return !tapLeaks;
+  }
+
+  @override
+  void setTapRing(int refCon, {required bool ring}) =>
+      calls.add('setTapRing $refCon $ring');
+
+  @override
+  void setTapSource(int refCon, int source) =>
+      calls.add('setTapSource $refCon $source');
 
   @override
   List<MidiCoreMidiPacket> readPackets() {

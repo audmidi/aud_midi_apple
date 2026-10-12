@@ -20,7 +20,11 @@ void main(List<String> args) async {
     await CBuilder.library(
       name: 'aud_midi_apple',
       assetName: 'src/native/aud_midi_apple_bindings.g.dart',
-      sources: const ['src/aud_midi_apple.c', 'src/aud_midi_apple_objc.g.m'],
+      sources: const [
+        'src/aud_midi_apple.c',
+        'src/aud_midi_apple_tap.c',
+        'src/aud_midi_apple_objc.g.m',
+      ],
       frameworks: const ['CoreFoundation', 'CoreMIDI', 'Foundation'],
       flags: const ['-fobjc-arc'],
     ).run(input: input, output: output);

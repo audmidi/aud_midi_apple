@@ -225,6 +225,37 @@ final class MidiCoreMidiNative implements MidiCoreMidi {
 
   // ...........................................................................
   @override
+  void attachTap({
+    required int refCon,
+    required int source,
+    required MidiNativeTap tap,
+    required bool ring,
+  }) => _check(
+    'aud_midi_apple_tap_attach',
+    native.aud_midi_apple_tap_attach(
+      _open,
+      refCon,
+      source,
+      Pointer.fromAddress(tap.function),
+      Pointer.fromAddress(tap.user),
+      ring ? 1 : 0,
+    ),
+  );
+
+  @override
+  bool detachTap(int refCon) =>
+      native.aud_midi_apple_tap_detach(_open, refCon, _tapTimeoutMs) == 0;
+
+  @override
+  void setTapRing(int refCon, {required bool ring}) =>
+      native.aud_midi_apple_tap_set_ring(_open, refCon, ring ? 1 : 0);
+
+  @override
+  void setTapSource(int refCon, int source) =>
+      native.aud_midi_apple_tap_set_source(_open, refCon, source);
+
+  // ...........................................................................
+  @override
   List<MidiCoreMidiPacket> readPackets() {
     final client = _open;
     final packets = <MidiCoreMidiPacket>[];
@@ -316,6 +347,9 @@ final class MidiCoreMidiNative implements MidiCoreMidi {
 
   // ...........................................................................
   static const int _headerWords = native.AUD_MIDI_APPLE_RECORD_HEADER_WORDS;
+
+  /// How long a detach waits for the calls of a tap in flight.
+  static const int _tapTimeoutMs = 1000;
   static const int _noteWords = native.AUD_MIDI_APPLE_NOTIFICATION_WORDS;
   static const int _notificationCapacity = 64;
 

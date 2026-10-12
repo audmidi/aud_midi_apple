@@ -9,11 +9,11 @@
   "summary": "The macOS and iOS backend of aud_midi: CoreMIDI UMP ports, virtual endpoints, hotplug and scheduling via FFI and a C shim; BLE MIDI via CoreBluetooth; MIDINetworkSession (iOS) and Bonjour.",
   "domain": [
     "Apple MIDI backend (CoreMIDI, CoreBluetooth, MIDINetworkSession)",
-    "C shim: run loop thread, receive ring buffer, event lists, DNS-SD"
+    "C shim: run loop thread, receive ring buffer, native tap slots called on the receive thread, event lists, DNS-SD"
   ],
   "interfaces": {
     "uses": {
-      "aud_midi_core": "MidiBackend, MidiVirtualPortsBackend, MidiBluetoothBackend, MidiNetworkBackend, MidiServiceAdvertiser, MidiClockMapper, MidiException",
+      "aud_midi_core": "MidiBackend, MidiNativeTapBackend, MidiVirtualPortsBackend, MidiBluetoothBackend, MidiNetworkBackend, MidiServiceAdvertiser, MidiClockMapper, MidiException",
       "aud_midi_standard": "port/device/capability/network models, MidiUmpPacket",
       "objective_c": "ObjC bindings runtime (CoreBluetooth, MIDINetworkSession)"
     },

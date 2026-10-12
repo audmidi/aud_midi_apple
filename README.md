@@ -13,6 +13,7 @@ Part of the aud_midi family, see [aud_midi](https://github.com/audmidi/aud_midi)
 - BLE MIDI via CoreBluetooth and the CoreMIDI Bluetooth driver
 - `MIDINetworkSession` on iOS, Bonjour browsing and advertising
 - Small C shim copies packets off CoreMIDI threads
+- Native taps: a C consumer called on CoreMIDI's receive thread
 - BLE peripheral through CBPeripheralManager
 
 ## State
@@ -38,6 +39,19 @@ Part of the aud_midi family, see [aud_midi](https://github.com/audmidi/aud_midi)
   with protocol, unique id, manufacturer, model and groups.
 - Hotplug: CoreMIDI notifications → re-enumeration → added, removed and
   changed ports; an open input reconnects when its source comes back.
+- Native taps (`MidiNativeTapBackend` of aud_midi_core): `attachNativeTap`
+  connects the source when needed and registers the tap in a slot of the
+  shim; the receive thread calls it once per `MIDIEventPacket` with the
+  UMP words and the timestamp in nanoseconds of the host clock
+  (`mach_absolute_time`, converted with `mach_timebase_info` in 128-bit
+  integers; 0 becomes the arrival time). The notification thread reports
+  `gone` when the source is removed or goes offline, once per gap. A tap
+  keeps the source connected without Dart listeners, stays attached while
+  the source is away and follows it to its new endpoint; `detachNativeTap`
+  returns after the last call of the tap returned and never frees a slot
+  that a call may still touch (a timeout leaks it and reports a
+  diagnostic). A data call that finds the slot busy drops its packets and
+  counts them, so the path never takes a lock; `gone` is never dropped.
 - Bluetooth (macOS 13, iOS 16): scan for the BLE-MIDI service, connect,
   `MIDIBluetoothDriverActivateAllConnections`, wait for the CoreMIDI
   device, end the CoreBluetooth connection.
@@ -57,6 +71,9 @@ Verified on macOS 27 (Apple silicon) with real CoreMIDI, no mocks:
 | `stop()` while a burst is in flight | no crash, nothing delivered afterwards |
 | Bonjour | register, browse, resolve and lose a service |
 | Build hook | dylib for macOS arm64/x64, iOS device and simulator; nothing elsewhere |
+| Native tap on a virtual source | every packet with its host time (delivery delay 35 µs), nothing at Dart without a listener, both with one |
+| Tap detached under a burst | 2435 calls before, none after the detach returned, no overlapping call |
+| `gone` | 290 ms after the virtual source was disposed; the tap survives its return under the same unique id |
 
 Run for real on the iOS 26.2 simulator (iPhone 17 Pro) by a throwaway
 Flutter app that depends on the package:
@@ -191,9 +208,15 @@ AppleMidiBackend (logic)         │
   arrival time into a ring buffer and signals Dart; the consumer side is
   lock-free, producers serialise on an `os_unfair_lock`. Overflow drops
   the newest event list and counts it as a `queueOverflow` diagnostic.
-- `stop()` disconnects and disposes, then the shim marks the client
-  closed and waits until no callback is in flight before Dart closes the
-  `NativeCallable`.
+- `src/aud_midi_apple_tap.c` holds the tap slots of a client, keyed by
+  the ref con of the connected source: an in-flight count and a busy flag
+  per slot, `gone` marks, the 128-bit tick conversion and a probe tap for
+  the tests. It knows nothing of CoreMIDI, so `scripts/test-native.js`
+  runs its test under ASan/UBSan, ThreadSanitizer and, with LLVM from
+  Homebrew, RealtimeSanitizer (`node scripts/test-native.js`).
+- `stop()` detaches the taps, disconnects and disposes, then the shim
+  marks the client closed and waits until no callback is in flight before
+  Dart closes the `NativeCallable`.
 - Mach ticks become microseconds (`mach_timebase_info`) and then the
   package clock through `MidiClockMapper`, resynced every 10 s and on
   hotplug.
@@ -216,7 +239,8 @@ dart run ffigen --config ffigen_objc.yaml  # CoreBluetooth, MIDINetworkSession
 
 Tests that change the global network session only run with
 `AUD_MIDI_TEST_NETWORK=1`; `AUD_MIDI_REPORT=<file>` writes the measured
-loopback timings as JSON.
+loopback timings as JSON. `node scripts/check-notices.js` checks the
+license headers and `NOTICES.md`.
 
 ## Contributing
 

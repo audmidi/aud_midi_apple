@@ -54,7 +54,22 @@ struct AudMidiAppleClient {
                        [AUD_MIDI_APPLE_NOTIFICATION_WORDS];
   uint32_t notification_count;
   bool notifications_lost;
+
+  // The native taps of the connected sources.
+  AudMidiAppleTapTable *taps;
 };
+
+// The mach timebase of the process, read once.
+static pthread_once_t timebase_once = PTHREAD_ONCE_INIT;
+static mach_timebase_info_data_t timebase_info;
+
+static void read_timebase(void) { mach_timebase_info(&timebase_info); }
+
+uint64_t aud_midi_apple_ticks_to_ns(uint64_t ticks) {
+  pthread_once(&timebase_once, read_timebase);
+  return aud_midi_apple_taps_ticks_to_ns(ticks, timebase_info.numer,
+                                         timebase_info.denom);
+}
 
 // #############################################################################
 // Run loop thread
@@ -149,6 +164,28 @@ static void on_receive(AudMidiAppleClient *client, const MIDIEventList *list,
   if (!enter_callback(client)) return;
 
   const uint64_t arrival = mach_absolute_time();
+
+  // The native tap first: one call per packet, timestamps in nanoseconds.
+  int32_t ring = 1;
+  AudMidiAppleTapSlot *slot = aud_midi_apple_taps_enter(
+      client->taps, (uint32_t)(uintptr_t)ref_con, list->numPackets, &ring);
+  if (slot != NULL) {
+    const MIDIEventPacket *tapped = &list->packet[0];
+    for (UInt32 i = 0; i < list->numPackets; i++) {
+      const uint64_t time =
+          tapped->timeStamp != 0 ? tapped->timeStamp : arrival;
+      aud_midi_apple_taps_call(slot, AUD_MIDI_APPLE_TAP_UMP, tapped->words,
+                               tapped->wordCount,
+                               (int64_t)aud_midi_apple_ticks_to_ns(time));
+      tapped = MIDIEventPacketNext(tapped);
+    }
+    aud_midi_apple_taps_leave(slot);
+  }
+  if (!ring) {
+    leave_callback(client);
+    return;
+  }
+
   uint64_t needed = 0;
   const MIDIEventPacket *packet = &list->packet[0];
   for (UInt32 i = 0; i < list->numPackets; i++) {
@@ -187,9 +224,47 @@ static void on_receive(AudMidiAppleClient *client, const MIDIEventList *list,
   leave_callback(client);
 }
 
+// Reports "gone" to the taps of a source that was removed, and of the
+// sources that went offline after a property change; runs on the run loop
+// thread, where reading the property is fine.
+static void notify_taps(AudMidiAppleClient *client,
+                        const MIDINotification *message) {
+  const int64_t now = (int64_t)aud_midi_apple_ticks_to_ns(mach_absolute_time());
+  if (message->messageID == kMIDIMsgObjectRemoved) {
+    const MIDIObjectAddRemoveNotification *change =
+        (const MIDIObjectAddRemoveNotification *)message;
+    if (change->childType == kMIDIObjectType_Source ||
+        change->childType == kMIDIObjectType_ExternalSource) {
+      aud_midi_apple_taps_source_gone(client->taps, change->child, now);
+    }
+    return;
+  }
+  if (message->messageID != kMIDIMsgPropertyChanged) return;
+  const MIDIObjectPropertyChangeNotification *change =
+      (const MIDIObjectPropertyChangeNotification *)message;
+  if (change->propertyName == NULL ||
+      !CFEqual(change->propertyName, kMIDIPropertyOffline)) {
+    return;
+  }
+  uint32_t sources[AUD_MIDI_APPLE_TAP_SLOTS];
+  const uint32_t count = aud_midi_apple_taps_sources(
+      client->taps, sources, AUD_MIDI_APPLE_TAP_SLOTS);
+  for (uint32_t i = 0; i < count; i++) {
+    SInt32 offline = 0;
+    const OSStatus status = MIDIObjectGetIntegerProperty(
+        sources[i], kMIDIPropertyOffline, &offline);
+    if (status == noErr) {
+      aud_midi_apple_taps_source_offline(client->taps, sources[i],
+                                         offline != 0, now);
+    }
+  }
+}
+
 static void on_notification(AudMidiAppleClient *client,
                             const MIDINotification *message) {
   if (!enter_callback(client)) return;
+
+  notify_taps(client, message);
 
   uint32_t record[AUD_MIDI_APPLE_NOTIFICATION_WORDS] = {0};
   record[0] = (uint32_t)message->messageID;
@@ -267,6 +342,7 @@ int32_t aud_midi_apple_client_create(const char *name,
   client->data = calloc(client->capacity, sizeof(uint32_t));
   client->ring_lock = OS_UNFAIR_LOCK_INIT;
   client->notification_lock = OS_UNFAIR_LOCK_INIT;
+  client->taps = aud_midi_apple_taps_create();
 
   CFStringRef client_name = create_string(name);
   __block OSStatus status = noErr;
@@ -426,11 +502,44 @@ void aud_midi_apple_client_dispose(AudMidiAppleClient *client) {
   free(client->data);
   client->data = NULL;
   // A receive block that CoreMIDI started just before the disposal may still
-  // read the closed flag; the memory goes later.
+  // read the closed flag; the memory goes later. A tap table with a leaked
+  // slot stays.
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
                  dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                   aud_midi_apple_taps_free(client->taps);
                    free(client);
                  });
+}
+
+// #############################################################################
+// Native taps
+
+int32_t aud_midi_apple_tap_attach(AudMidiAppleClient *client,
+                                  uint32_t ref_con, uint32_t source,
+                                  AudMidiAppleTapFunction function,
+                                  void *user, int32_t ring) {
+  return aud_midi_apple_taps_attach(client->taps, ref_con, source, function,
+                                    user, ring);
+}
+
+int32_t aud_midi_apple_tap_detach(AudMidiAppleClient *client,
+                                  uint32_t ref_con, int32_t timeout_ms) {
+  return aud_midi_apple_taps_detach(client->taps, ref_con, timeout_ms);
+}
+
+int32_t aud_midi_apple_tap_set_ring(AudMidiAppleClient *client,
+                                    uint32_t ref_con, int32_t ring) {
+  return aud_midi_apple_taps_set_ring(client->taps, ref_con, ring);
+}
+
+int32_t aud_midi_apple_tap_set_source(AudMidiAppleClient *client,
+                                      uint32_t ref_con, uint32_t source) {
+  return aud_midi_apple_taps_set_source(client->taps, ref_con, source);
+}
+
+uint64_t aud_midi_apple_tap_take_dropped(AudMidiAppleClient *client,
+                                         uint32_t ref_con) {
+  return aud_midi_apple_taps_take_dropped(client->taps, ref_con);
 }
 
 // #############################################################################

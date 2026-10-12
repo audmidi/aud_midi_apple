@@ -6,6 +6,8 @@
 
 import 'dart:typed_data';
 
+import 'package:aud_midi_core/aud_midi_core.dart';
+
 import 'midi_mach_timebase.dart';
 
 // #############################################################################
@@ -149,6 +151,35 @@ abstract interface class MidiCoreMidi {
 
   /// Disposes the own virtual [endpoint].
   void disposeEndpoint(int endpoint);
+
+  // ...........................................................................
+  /// Attaches the native [tap] to the packets that arrive with [refCon]
+  /// from the endpoint [source]: the shim calls it on CoreMIDI's receive
+  /// thread once per packet with the UMP words and the timestamp in
+  /// nanoseconds, and reports `gone` when the source is removed or goes
+  /// offline. With [ring] the packets reach [readPackets] as well.
+  ///
+  /// Throws a `MidiNativeError` when [refCon] has a tap already or no slot
+  /// is free.
+  void attachTap({
+    required int refCon,
+    required int source,
+    required MidiNativeTap tap,
+    required bool ring,
+  });
+
+  /// Detaches the tap of [refCon]: no call starts afterwards, and the
+  /// method returns after the calls in flight returned. Returns false when
+  /// a call did not return in time; the shim then leaks the slot and logs.
+  bool detachTap(int refCon);
+
+  /// Sets whether the packets of the tapped [refCon] reach [readPackets]
+  /// as well.
+  void setTapRing(int refCon, {required bool ring});
+
+  /// Tells the tap of [refCon] the new endpoint [source] of its source
+  /// after it came back.
+  void setTapSource(int refCon, int source);
 
   // ...........................................................................
   /// Returns and removes the received packets.

@@ -37,7 +37,15 @@ import 'network/midi_bonjour_browser_native.dart';
 /// ([bluetooth], macOS 13 and iOS 16) and controls the network session of
 /// iOS ([network]; `MIDINetworkSession` does nothing on macOS, whose
 /// sessions are set up in Audio MIDI Setup and appear as ports).
-final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
+///
+/// Native taps ([attachNativeTap]): the shim calls the tap on CoreMIDI's
+/// receive thread with every packet of the source, timestamps in
+/// nanoseconds of the host clock, and reports `gone` from the notification
+/// thread when the source is removed or goes offline. A tap keeps the
+/// source connected without Dart listeners, survives the gap until the
+/// source comes back under the same id, and leaves with [stop].
+final class AppleMidiBackend
+    implements MidiBackend, MidiVirtualPortsBackend, MidiNativeTapBackend {
   /// Creates the backend; the native layers can be replaced for tests.
   ///
   /// - [clientName] the name of the CoreMIDI client.
@@ -77,6 +85,10 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
     _network?.close();
     _bluetooth = null;
     _network = null;
+    for (final tap in _taps.values) {
+      _coreMidi.detachTap(tap.refCon);
+    }
+    _taps.clear();
     for (final input in _inputs.values) {
       _quietly(
         () => _coreMidi.disconnectSource(input.ref, protocol: input.protocol),
@@ -103,36 +115,107 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
     _running;
     final own = _own[port];
     if (own != null) {
-      if (own.refCon != null) _receiving[own.refCon!] = port;
+      if (own.refCon != null) _listen(port, own.refCon!);
       return;
     }
     final info = _setup.portOf(port) ?? (throw MidiPortGone(port));
-    if (info.isOutput || _inputs.containsKey(port)) return;
-    final ref = _setup.endpoints[port]!.ref;
-    final protocol = MidiCoreMidiSetup.protocolIdOf(info.protocol);
-    final refCon = _nextRefCon++;
-    _coreMidi.connectSource(ref, protocol: protocol, refCon: refCon);
-    _inputs[port] = (refCon: refCon, ref: ref, protocol: protocol);
-    _receiving[refCon] = port;
+    if (info.isOutput) return;
+    final input = _inputs[port] ?? _connect(port, info);
+    _listen(port, input.refCon);
   }
 
+  /// Closes [port]; a source with a native tap stays connected for it.
   @override
   Future<void> closePort(MidiPortId port) async {
     _running;
     final own = _own[port];
     if (own != null) {
-      _receiving.remove(own.refCon);
+      if (own.refCon != null) _unlisten(port, own.refCon!);
       return;
     }
-    final input = _inputs.remove(port);
+    final input = _inputs[port];
     if (input != null) {
-      _receiving.remove(input.refCon);
-      _quietly(
-        () => _coreMidi.disconnectSource(input.ref, protocol: input.protocol),
-      );
+      _unlisten(port, input.refCon);
+      if (!_taps.containsKey(port)) _disconnect(port);
       return;
     }
     if (_setup.portOf(port) == null) throw MidiPortGone(port);
+  }
+
+  // ...........................................................................
+  /// Returns whether [port] is a CoreMIDI source or an own destination.
+  @override
+  bool supportsNativeTap(MidiPortId port) =>
+      _own[port]?.refCon != null || (_setup.portOf(port)?.isInput ?? false);
+
+  /// Connects the source of [port] when needed and attaches [tap] in the
+  /// shim.
+  ///
+  /// Throws a [MidiPortGone] for an unknown port, an [ArgumentError] for an
+  /// output, a [StateError] when a tap is attached already and a
+  /// [MidiNativeError] when CoreMIDI refuses the connection or the shim has
+  /// no free slot.
+  @override
+  Future<void> attachNativeTap(MidiPortId port, MidiNativeTap tap) async {
+    _running;
+    if (_taps.containsKey(port)) throw StateError('$port has a tap already');
+    final own = _own[port];
+    final int refCon;
+    final int source;
+    if (own != null) {
+      refCon =
+          own.refCon ??
+          (throw ArgumentError.value(port, 'port', 'Not an input'));
+      source = own.ref;
+    } else {
+      final info = _setup.portOf(port) ?? (throw MidiPortGone(port));
+      if (info.isOutput) {
+        throw ArgumentError.value(port, 'port', 'Not an input');
+      }
+      final input = _inputs[port] ?? _connect(port, info);
+      refCon = input.refCon;
+      source = input.ref;
+    }
+    try {
+      _coreMidi.attachTap(
+        refCon: refCon,
+        source: source,
+        tap: tap,
+        ring: _receiving.containsKey(refCon),
+      );
+    } on MidiNativeError {
+      if (own == null && !_receiving.containsKey(refCon)) _disconnect(port);
+      rethrow;
+    }
+    _taps[port] = (refCon: refCon, tap: tap);
+  }
+
+  /// Detaches the tap of [port] after its last call; the source disconnects
+  /// when no listener holds the port. Throws a [MidiPortGone] for an
+  /// unknown port without a tap.
+  @override
+  Future<void> detachNativeTap(MidiPortId port) async {
+    final host = _running;
+    final tap = _taps.remove(port);
+    if (tap == null) {
+      if (_own[port] == null && _setup.portOf(port) == null) {
+        throw MidiPortGone(port);
+      }
+      return;
+    }
+    if (!_coreMidi.detachTap(tap.refCon)) {
+      host.diagnostic(
+        MidiDiagnostic(
+          kind: MidiDiagnosticKind.nativeError,
+          port: port,
+          cause: 'The native tap did not return; its slot in the shim leaks',
+          time: host.clock.now(),
+        ),
+      );
+    }
+    if (!_receiving.containsKey(tap.refCon) && _inputs.containsKey(port)) {
+      _disconnect(port);
+    }
   }
 
   // ...........................................................................
@@ -300,11 +383,46 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
   final _own =
       <MidiPortId, ({MidiPortInfo port, int ref, int protocol, int? refCon})>{};
   final _receiving = <int, MidiPortId>{};
+  final _taps = <MidiPortId, ({int refCon, MidiNativeTap tap})>{};
   final _bluetoothWaiters =
       <({String name, Completer<List<MidiPortInfo>> completer})>[];
 
   MidiBackendHost get _running =>
       _host ?? (throw StateError('The backend is not running'));
+
+  /// Connects the source of the input [port] described by [info] and
+  /// returns the connection.
+  ({int refCon, int ref, int protocol}) _connect(
+    MidiPortId port,
+    MidiPortInfo info,
+  ) {
+    final ref = _setup.endpoints[port]!.ref;
+    final protocol = MidiCoreMidiSetup.protocolIdOf(info.protocol);
+    final refCon = _nextRefCon++;
+    _coreMidi.connectSource(ref, protocol: protocol, refCon: refCon);
+    return _inputs[port] = (refCon: refCon, ref: ref, protocol: protocol);
+  }
+
+  /// Disconnects the source of [port].
+  void _disconnect(MidiPortId port) {
+    final input = _inputs.remove(port);
+    if (input == null) return;
+    _quietly(
+      () => _coreMidi.disconnectSource(input.ref, protocol: input.protocol),
+    );
+  }
+
+  /// Delivers the packets of [refCon] to the host as [port], next to a tap.
+  void _listen(MidiPortId port, int refCon) {
+    _receiving[refCon] = port;
+    if (_taps.containsKey(port)) _coreMidi.setTapRing(refCon, ring: true);
+  }
+
+  /// Stops delivering the packets of [refCon] to the host.
+  void _unlisten(MidiPortId port, int refCon) {
+    _receiving.remove(refCon);
+    if (_taps.containsKey(port)) _coreMidi.setTapRing(refCon, ring: false);
+  }
 
   MidiCoreMidiSetup _readSetup() => MidiCoreMidiSetup.fromSnapshot(
     _coreMidi.snapshot(),
@@ -420,6 +538,9 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
           ref: endpoint.ref,
           protocol: protocol,
         );
+        if (_taps.containsKey(port)) {
+          _coreMidi.setTapSource(input.refCon, endpoint.ref);
+        }
       } on MidiNativeError catch (error) {
         _running.diagnostic(
           MidiDiagnostic(

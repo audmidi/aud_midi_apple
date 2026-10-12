@@ -7,9 +7,8 @@
 import 'dart:async';
 import 'dart:ffi';
 
-import 'package:aud_midi_core/aud_midi_core.dart';
-
 import '../native/aud_midi_apple_bindings.g.dart' as native;
+import 'midi_apple_bluetooth_backend.dart';
 
 /// Presents the native picker and calls `done` with its result; returns 0 or
 /// the error of a picker that cannot be shown.
@@ -22,13 +21,14 @@ typedef MidiBluetoothPickerPresenter =
 /// once the user dismissed it.
 ///
 /// Works from any isolate: the shim dispatches the presentation to the main
-/// queue. Throws a `MidiUnsupported` on macOS or when no view controller can
-/// present the picker. [present] replaces the shim in tests.
+/// queue. Throws [MidiAppleBluetoothBackend.pickerUnsupported] on macOS or
+/// when no view controller can present the picker. [present] replaces the
+/// shim in tests.
 Future<void> showMidiBluetoothPickerNative({
   MidiBluetoothPickerPresenter present =
       native.aud_midi_apple_show_bluetooth_picker,
 }) {
-  const unsupported = MidiUnsupported('Bluetooth MIDI device picker');
+  const unsupported = MidiAppleBluetoothBackend.pickerUnsupported;
   final completer = Completer<void>();
   late final NativeCallable<Void Function(Int32)> callable;
   callable = NativeCallable<Void Function(Int32)>.listener((int status) {

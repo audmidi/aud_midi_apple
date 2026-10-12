@@ -5,6 +5,7 @@
 // found in the LICENSE file in the root of this package.
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:aud_midi_core/aud_midi_core.dart';
 import 'package:aud_midi_standard/aud_midi_standard.dart';
@@ -53,7 +54,8 @@ final class AppleMidiBackend
   /// - [resyncInterval] how often the mach clock is mapped to the package
   ///   clock again.
   /// - [bluetoothTimeout] how long Bluetooth waits for its power state.
-  /// - [bluetoothPicker] shows the Bluetooth MIDI device picker of iOS.
+  /// - `bluetoothPicker` shows the Bluetooth MIDI device picker of iOS,
+  ///   [showMidiBluetoothPickerNative] by default.
   AppleMidiBackend({
     MidiCoreMidi? coreMidi,
     this._coreBluetooth,
@@ -88,10 +90,9 @@ final class AppleMidiBackend
     _network?.close();
     _bluetooth = null;
     _network = null;
-    for (final tap in _taps.values) {
-      _coreMidi.detachTap(tap.refCon);
+    for (final port in _taps.keys.toList()) {
+      await detachNativeTap(port);
     }
-    _taps.clear();
     for (final input in _inputs.values) {
       _quietly(
         () => _coreMidi.disconnectSource(input.ref, protocol: input.protocol),
@@ -162,23 +163,7 @@ final class AppleMidiBackend
   Future<void> attachNativeTap(MidiPortId port, MidiNativeTap tap) async {
     _running;
     if (_taps.containsKey(port)) throw StateError('$port has a tap already');
-    final own = _own[port];
-    final int refCon;
-    final int source;
-    if (own != null) {
-      refCon =
-          own.refCon ??
-          (throw ArgumentError.value(port, 'port', 'Not an input'));
-      source = own.ref;
-    } else {
-      final info = _setup.portOf(port) ?? (throw MidiPortGone(port));
-      if (info.isOutput) {
-        throw ArgumentError.value(port, 'port', 'Not an input');
-      }
-      final input = _inputs[port] ?? _connect(port, info);
-      refCon = input.refCon;
-      source = input.ref;
-    }
+    final (:refCon, :source, :isOwn) = _tapTarget(port);
     try {
       _coreMidi.attachTap(
         refCon: refCon,
@@ -187,7 +172,7 @@ final class AppleMidiBackend
         ring: _receiving.containsKey(refCon),
       );
     } on MidiNativeError {
-      if (own == null && !_receiving.containsKey(refCon)) _disconnect(port);
+      if (!isOwn && !_receiving.containsKey(refCon)) _disconnect(port);
       rethrow;
     }
     _taps[port] = (refCon: refCon, tap: tap);
@@ -407,6 +392,24 @@ final class AppleMidiBackend
     return _inputs[port] = (refCon: refCon, ref: ref, protocol: protocol);
   }
 
+  /// Returns the ref con and the endpoint a tap of [port] attaches to and
+  /// connects the source when needed. Throws a [MidiPortGone] for an
+  /// unknown port and an [ArgumentError] for an output.
+  ({int refCon, int source, bool isOwn}) _tapTarget(MidiPortId port) {
+    final own = _own[port];
+    if (own != null) {
+      final refCon = own.refCon ?? (throw _notAnInput(port));
+      return (refCon: refCon, source: own.ref, isOwn: true);
+    }
+    final info = _setup.portOf(port) ?? (throw MidiPortGone(port));
+    if (info.isOutput) throw _notAnInput(port);
+    final input = _inputs[port] ?? _connect(port, info);
+    return (refCon: input.refCon, source: input.ref, isOwn: false);
+  }
+
+  static ArgumentError _notAnInput(MidiPortId port) =>
+      ArgumentError.value(port, 'port', 'Not an input');
+
   /// Disconnects the source of [port].
   void _disconnect(MidiPortId port) {
     final input = _inputs.remove(port);
@@ -612,26 +615,58 @@ final class AppleMidiBackend
   /// Completes the waiters whose Bluetooth device is online with ports.
   void _serveBluetoothWaiters() {
     for (final waiter in _bluetoothWaiters.toList()) {
-      final ports = [
-        for (final device in _setup.devices)
-          if (device.transport == MidiTransport.bluetoothLe &&
-              !device.isOffline &&
-              _sameName(device.name, waiter.name))
-            for (final port in device.ports) _setup.portOf(port)!,
-      ];
+      final ports = _bluetoothPortsNamed(waiter.name);
       if (ports.isEmpty) continue;
       _bluetoothWaiters.remove(waiter);
       waiter.completer.complete(ports);
     }
   }
 
-  /// Whether the CoreMIDI device [device] is the peripheral [wanted]; the
-  /// advertised name and the CoreMIDI name may differ by a suffix.
-  static bool _sameName(String device, String wanted) {
+  /// Returns the ports of the online Bluetooth devices whose name matches
+  /// [wanted] best: the exact matches, failing those the matches by prefix,
+  /// and as a last resort the names containing the other.
+  List<MidiPortInfo> _bluetoothPortsNamed(String wanted) {
+    final byMatch = <int, List<MidiDeviceInfo>>{};
+    for (final device in _setup.devices) {
+      if (device.transport != MidiTransport.bluetoothLe) continue;
+      if (device.isOffline) continue;
+      final match = _nameMatch(device.name, wanted);
+      if (match != _noMatch) byMatch.putIfAbsent(match, () => []).add(device);
+    }
+    if (byMatch.isEmpty) return const [];
+    final best = byMatch[byMatch.keys.reduce(math.max)]!;
+    return [
+      for (final device in best)
+        for (final port in device.ports) _setup.portOf(port)!,
+    ];
+  }
+
+  /// How well the CoreMIDI device name [device] matches the advertised
+  /// name [wanted], ignoring case and blanks around: [_exactMatch],
+  /// [_prefixMatch] when one name starts with the other (the CoreMIDI name
+  /// may carry a suffix), [_containsMatch] when one contains the other and
+  /// both have at least [_minContainsLength] characters, else [_noMatch].
+  /// An empty [wanted] matches every name.
+  static int _nameMatch(String device, String wanted) {
     final a = device.trim().toLowerCase();
     final b = wanted.trim().toLowerCase();
-    return b.isEmpty || (a.isNotEmpty && (a.contains(b) || b.contains(a)));
+    if (b.isEmpty) return _exactMatch;
+    if (a.isEmpty) return _noMatch;
+    if (a == b) return _exactMatch;
+    if (a.startsWith(b) || b.startsWith(a)) return _prefixMatch;
+    if (a.length < _minContainsLength || b.length < _minContainsLength) {
+      return _noMatch;
+    }
+    return a.contains(b) || b.contains(a) ? _containsMatch : _noMatch;
   }
+
+  static const int _noMatch = 0;
+  static const int _containsMatch = 1;
+  static const int _prefixMatch = 2;
+  static const int _exactMatch = 3;
+
+  /// The shortest name that may match by containing the other.
+  static const int _minContainsLength = 3;
 
   /// Runs [call] and ignores its native error; used while tearing down.
   static void _quietly(void Function() call) {

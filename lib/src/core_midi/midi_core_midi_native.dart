@@ -347,11 +347,11 @@ final class MidiCoreMidiNative implements MidiCoreMidi {
 
   // ...........................................................................
   static const int _headerWords = native.AUD_MIDI_APPLE_RECORD_HEADER_WORDS;
+  static const int _noteWords = native.AUD_MIDI_APPLE_NOTIFICATION_WORDS;
+  static const int _notificationCapacity = 64;
 
   /// How long a detach waits for the calls of a tap in flight.
   static const int _tapTimeoutMs = 1000;
-  static const int _noteWords = native.AUD_MIDI_APPLE_NOTIFICATION_WORDS;
-  static const int _notificationCapacity = 64;
 
   Pointer<native.AudMidiAppleClient> _client = nullptr;
   NativeCallable<Void Function(Int32)>? _callable;

@@ -870,8 +870,7 @@ void aud_midi_apple_service_unregister(AudMidiAppleService *service) {
 uint64_t aud_midi_apple_now(void) { return mach_absolute_time(); }
 
 void aud_midi_apple_timebase(uint32_t *numer, uint32_t *denom) {
-  mach_timebase_info_data_t info;
-  mach_timebase_info(&info);
-  *numer = info.numer;
-  *denom = info.denom;
+  pthread_once(&timebase_once, read_timebase);
+  *numer = timebase_info.numer;
+  *denom = timebase_info.denom;
 }

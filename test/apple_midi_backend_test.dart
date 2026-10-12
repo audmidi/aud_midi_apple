@@ -537,6 +537,15 @@ void main() {
         expect(host.diagnostics.single.cause, contains('leaks'));
       });
 
+      test('report a tap that did not return on stop', () async {
+        await backend.attachNativeTap(keysInId, tap);
+        coreMidi.tapLeaks = true;
+        await backend.stop();
+        expect(host.diagnostics.single.port, keysInId);
+        expect(host.diagnostics.single.cause, contains('leaks'));
+        expect(coreMidi.taps, isEmpty);
+      });
+
       test('survive the source and follow it to a new endpoint', () async {
         await backend.attachNativeTap(keysInId, tap);
         coreMidi
@@ -786,6 +795,77 @@ void main() {
         );
         notify(MidiCoreMidi.objectAdded);
         expect((await connecting).single.name, 'Keys');
+      });
+
+      // Lists the Bluetooth devices [names] online, each with one source
+      // named after it.
+      void listBluetoothDevices(List<String> names) {
+        coreMidi.setup = snapshot(
+          devices: [
+            for (final (i, name) in names.indexed)
+              device(
+                100 + i,
+                name: name,
+                driverOwner: bluetooth,
+                sources: [
+                  endpoint(1000 + i, name: name, driverOwner: bluetooth),
+                ],
+              ),
+          ],
+        );
+        notify(MidiCoreMidi.objectAdded);
+      }
+
+      // Connects the peripheral advertised as [wanted] while [names] are
+      // online and returns the names of its ports.
+      Future<List<String>> portsNamed(String wanted, List<String> names) async {
+        central.replyName = wanted;
+        final connecting = backend.bluetooth!.connect(
+          'p1',
+          timeout: const Duration(milliseconds: 60),
+        );
+        await pumpEventQueue();
+        listBluetoothDevices(names);
+        return [for (final port in await connecting) port.name];
+      }
+
+      group('prefers the exact name over a prefix and a containing name', () {
+        final cases = {
+          ('Keys', ['GO:KEYS', 'Keys MIDI', 'keys ', 'My Keys']): ['keys '],
+          ('Keys', ['GO:KEYS', 'Keys MIDI', 'Keys Pro']): [
+            'Keys MIDI',
+            'Keys Pro',
+          ],
+          ('Keys MIDI', ['GO:KEYS', 'Keys']): ['Keys'],
+          ('Keys', ['GO:KEYS', 'Pads']): ['GO:KEYS'],
+          ('', ['GO:KEYS', 'Pads']): ['GO:KEYS', 'Pads'],
+        };
+        for (final MapEntry(key: (wanted, names), value: expected)
+            in cases.entries) {
+          test('"$wanted" among $names', () async {
+            expect(await portsNamed(wanted, names), equals(expected));
+          });
+        }
+      });
+
+      group('matches by content only from three characters on', () {
+        for (final (wanted, names) in [
+          ('X1', ['MX1', 'AX1 Pro', '']),
+          ('Keys', ['Pads', '']),
+        ]) {
+          test('"$wanted" among $names', () async {
+            await expectLater(
+              portsNamed(wanted, names),
+              throwsA(isA<MidiTimeout>()),
+            );
+          });
+        }
+        test('"X1" among [X1, X1 Pro]', () async {
+          expect(
+            await portsNamed('X1', ['MX1', 'X1 Pro', 'X1']),
+            equals(['X1']),
+          );
+        });
       });
 
       test('shows the device picker', () async {

@@ -112,13 +112,11 @@ final class MidiAppleBluetoothBackend
 
   // ...........................................................................
   /// Shows the Bluetooth MIDI device picker of iOS and completes once the
-  /// user dismissed it; throws a `MidiUnsupported` where there is none.
+  /// user dismissed it; throws [pickerUnsupported] where there is none.
   @override
   Future<void> showSystemDevicePicker() async {
     _checkPermission();
-    final show =
-        _showPicker ??
-        (throw const MidiUnsupported('Bluetooth MIDI device picker'));
+    final show = _showPicker ?? (throw pickerUnsupported);
     await show();
   }
 
@@ -152,6 +150,13 @@ final class MidiAppleBluetoothBackend
 
   /// How often the activation repeats while waiting for the CoreMIDI device.
   final Duration activateInterval;
+
+  // ...........................................................................
+  /// The error of [showSystemDevicePicker] where the operating system has
+  /// no Bluetooth MIDI device picker, e.g. on macOS.
+  static const MidiUnsupported pickerUnsupported = MidiUnsupported(
+    'Bluetooth MIDI device picker',
+  );
 
   // ...........................................................................
   final void Function() _activate;

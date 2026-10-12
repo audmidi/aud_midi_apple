@@ -20,8 +20,9 @@
 // Usage: node scripts/check-notices.js [repoDir]
 // Exits with 1 and the list of problems when the convention is broken.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative } from 'path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const permissive = [
   'MIT',
@@ -134,6 +135,6 @@ function main() {
   process.exit(1);
 }
 
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop())) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }

@@ -328,6 +328,34 @@ external int aud_midi_apple_now();
 @ffi.Native<ffi.Uint32 Function(ffi.Pointer<AudMidiAppleClient>)>()
 external int aud_midi_apple_output_port(ffi.Pointer<AudMidiAppleClient> client);
 
+/// Creates a probe; free it with aud_midi_apple_probe_free after the tap was
+/// detached.
+@ffi.Native<ffi.Pointer<AudMidiAppleProbe> Function()>()
+external ffi.Pointer<AudMidiAppleProbe> aud_midi_apple_probe_create();
+
+/// Frees [probe].
+@ffi.Native<ffi.Void Function(ffi.Pointer<AudMidiAppleProbe>)>()
+external void aud_midi_apple_probe_free(ffi.Pointer<AudMidiAppleProbe> probe);
+
+/// Returns the tap function of the probes; the probe is the user.
+@ffi.Native<AudMidiAppleTapFunction Function()>()
+external AudMidiAppleTapFunction aud_midi_apple_probe_function();
+
+/// Copies up to [capacity] of the AUD_MIDI_APPLE_PROBE_VALUES values of
+/// [probe] into [out].
+@ffi.Native<
+  ffi.Void Function(
+    ffi.Pointer<AudMidiAppleProbe>,
+    ffi.Pointer<ffi.Int64>,
+    ffi.Uint32,
+  )
+>()
+external void aud_midi_apple_probe_read(
+  ffi.Pointer<AudMidiAppleProbe> probe,
+  ffi.Pointer<ffi.Int64> out,
+  int capacity,
+);
+
 /// Returns kMIDIPropertyUMPActiveGroupBitmap (a CFStringRef), or NULL before
 /// macOS 14 and iOS 17.
 @ffi.Native<ffi.Pointer<ffi.Void> Function()>()
@@ -450,12 +478,95 @@ external void aud_midi_apple_service_unregister(
   ffi.Pointer<AudMidiAppleService> service,
 );
 
+/// Presents Apple's Bluetooth MIDI device picker
+/// (CABTMIDICentralViewController) with a Done button on the main thread of
+/// iOS; calls [done] with 0 once it is dismissed, or with
+/// AUD_MIDI_APPLE_UNSUPPORTED_ERROR when no view controller can present it.
+/// Returns 0, or AUD_MIDI_APPLE_UNSUPPORTED_ERROR at once on macOS.
+@ffi.Native<ffi.Int32 Function(AudMidiAppleSignal)>()
+external int aud_midi_apple_show_bluetooth_picker(AudMidiAppleSignal done);
+
 /// Returns the number of packets dropped because the ring buffer was full
 /// since the last call, and resets it.
 @ffi.Native<ffi.Uint64 Function(ffi.Pointer<AudMidiAppleClient>)>(isLeaf: true)
 external int aud_midi_apple_take_dropped(
   ffi.Pointer<AudMidiAppleClient> client,
 );
+
+/// Attaches the tap [function] with [user] to the packets that reach [client]
+/// with [ref_con] from the source [source]: the receive thread calls it once
+/// per MIDIEventPacket with the UMP words (AUD_MIDI_APPLE_TAP_UMP) and the
+/// timestamp in nanoseconds (0 becomes the arrival time), and the
+/// notification thread reports AUD_MIDI_APPLE_TAP_GONE when the source is
+/// removed or goes offline. With [ring] 1 the packets go to the ring buffer
+/// as well, with 0 to the tap only. Returns 0, AUD_MIDI_APPLE_PARAM_ERROR or
+/// AUD_MIDI_APPLE_TAP_FULL_ERROR.
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<AudMidiAppleClient>,
+    ffi.Uint32,
+    ffi.Uint32,
+    AudMidiAppleTapFunction,
+    ffi.Pointer<ffi.Void>,
+    ffi.Int32,
+  )
+>()
+external int aud_midi_apple_tap_attach(
+  ffi.Pointer<AudMidiAppleClient> client,
+  int ref_con,
+  int source,
+  AudMidiAppleTapFunction function,
+  ffi.Pointer<ffi.Void> user,
+  int ring,
+);
+
+/// Detaches the tap of [ref_con]: no call starts afterwards, and the function
+/// returns only after the calls in flight returned, waiting up to
+/// [timeout_ms]. Returns 0, AUD_MIDI_APPLE_PARAM_ERROR, or
+/// AUD_MIDI_APPLE_TIMEOUT_ERROR when a call did not return (the slot is
+/// leaked, never freed, and a line is logged).
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<AudMidiAppleClient>, ffi.Uint32, ffi.Int32)
+>()
+external int aud_midi_apple_tap_detach(
+  ffi.Pointer<AudMidiAppleClient> client,
+  int ref_con,
+  int timeout_ms,
+);
+
+/// Sets whether the packets of [ref_con] go to the ring buffer as well.
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<AudMidiAppleClient>, ffi.Uint32, ffi.Int32)
+>()
+external int aud_midi_apple_tap_set_ring(
+  ffi.Pointer<AudMidiAppleClient> client,
+  int ref_con,
+  int ring,
+);
+
+/// Tells the tap of [ref_con] its new [source] after the source came back
+/// under another endpoint, so that the next offline is reported again.
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<AudMidiAppleClient>, ffi.Uint32, ffi.Uint32)
+>()
+external int aud_midi_apple_tap_set_source(
+  ffi.Pointer<AudMidiAppleClient> client,
+  int ref_con,
+  int source,
+);
+
+/// Returns the number of packets the tap of [ref_con] dropped because a call
+/// was running already since the last call, and resets it.
+@ffi.Native<ffi.Uint64 Function(ffi.Pointer<AudMidiAppleClient>, ffi.Uint32)>()
+external int aud_midi_apple_tap_take_dropped(
+  ffi.Pointer<AudMidiAppleClient> client,
+  int ref_con,
+);
+
+/// Returns [ticks] in nanoseconds of the host clock, computed in 128-bit
+/// integers: the time of the native taps.
+@ffi.Native<ffi.Uint64 Function(ffi.Uint64)>(isLeaf: true)
+external int aud_midi_apple_ticks_to_ns(int ticks);
 
 /// Stores the numerator and the denominator that convert mach ticks to
 /// nanoseconds.
@@ -513,11 +624,23 @@ const int AUD_MIDI_APPLE_NOTIFICATION_WORDS = 6;
 
 const int AUD_MIDI_APPLE_PARAM_ERROR = -50;
 
+const int AUD_MIDI_APPLE_PROBE_VALUES = 10;
+
 const int AUD_MIDI_APPLE_RECORD_HEADER_WORDS = 7;
 
 const int AUD_MIDI_APPLE_SIGNAL_NOTIFICATIONS = 2;
 
 const int AUD_MIDI_APPLE_SIGNAL_PACKETS = 1;
+
+const int AUD_MIDI_APPLE_TAP_BYTES = 2;
+
+const int AUD_MIDI_APPLE_TAP_FULL_ERROR = -2;
+
+const int AUD_MIDI_APPLE_TAP_GONE = 3;
+
+const int AUD_MIDI_APPLE_TAP_SLOTS = 64;
+
+const int AUD_MIDI_APPLE_TAP_UMP = 1;
 
 const int AUD_MIDI_APPLE_TIMEOUT_ERROR = -1;
 
@@ -543,12 +666,31 @@ final class AudMidiAppleBrowser extends ffi.Opaque {}
 /// A MIDI client with its input ports, output port and ring buffer.
 final class AudMidiAppleClient extends ffi.Opaque {}
 
+/// A tap that counts what it receives.
+final class AudMidiAppleProbe extends ffi.Opaque {}
+
 /// A registered DNS-SD service.
 final class AudMidiAppleService extends ffi.Opaque {}
 
 /// Receives the signal bits of new data; called from CoreMIDI threads.
 typedef AudMidiAppleSignal =
     ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int32 signals)>>;
+
+/// The tap function (the contract with the consumer): [data] are [count] words
+/// (UMP), NULL and 0 for GONE; [host_time_ns] is `mach_absolute_time` in
+/// nanoseconds, the clock of `clock_gettime_nsec_np(CLOCK_UPTIME_RAW)`.
+typedef AudMidiAppleTapFunction =
+    ffi.Pointer<
+      ffi.NativeFunction<
+        ffi.Void Function(
+          ffi.Pointer<ffi.Void> user,
+          ffi.Uint32 kind,
+          ffi.Pointer<ffi.Void> data,
+          ffi.Uint32 count,
+          ffi.Int64 host_time_ns,
+        )
+      >
+    >;
 
 final class CFRange extends ffi.Struct {
   @ffi.Long()

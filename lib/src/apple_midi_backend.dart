@@ -5,12 +5,14 @@
 // found in the LICENSE file in the root of this package.
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:aud_midi_core/aud_midi_core.dart';
 import 'package:aud_midi_standard/aud_midi_standard.dart';
 
 import 'bluetooth/midi_apple_bluetooth_backend.dart';
 import 'bluetooth/midi_core_bluetooth.dart';
+import 'bluetooth/midi_bluetooth_picker_native.dart';
 import 'bluetooth/midi_core_bluetooth_native.dart';
 import 'core_midi/midi_core_midi.dart';
 import 'core_midi/midi_core_midi_native.dart';
@@ -37,13 +39,23 @@ import 'network/midi_bonjour_browser_native.dart';
 /// ([bluetooth], macOS 13 and iOS 16) and controls the network session of
 /// iOS ([network]; `MIDINetworkSession` does nothing on macOS, whose
 /// sessions are set up in Audio MIDI Setup and appear as ports).
-final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
+///
+/// Native taps ([attachNativeTap]): the shim calls the tap on CoreMIDI's
+/// receive thread with every packet of the source, timestamps in
+/// nanoseconds of the host clock, and reports `gone` from the notification
+/// thread when the source is removed or goes offline. A tap keeps the
+/// source connected without Dart listeners, survives the gap until the
+/// source comes back under the same id, and leaves with [stop].
+final class AppleMidiBackend
+    implements MidiBackend, MidiVirtualPortsBackend, MidiNativeTapBackend {
   /// Creates the backend; the native layers can be replaced for tests.
   ///
   /// - [clientName] the name of the CoreMIDI client.
   /// - [resyncInterval] how often the mach clock is mapped to the package
   ///   clock again.
   /// - [bluetoothTimeout] how long Bluetooth waits for its power state.
+  /// - `bluetoothPicker` shows the Bluetooth MIDI device picker of iOS,
+  ///   [showMidiBluetoothPickerNative] by default.
   AppleMidiBackend({
     MidiCoreMidi? coreMidi,
     this._coreBluetooth,
@@ -52,6 +64,7 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
     this.clientName = 'aud_midi',
     this.resyncInterval = const Duration(seconds: 10),
     this.bluetoothTimeout = const Duration(seconds: 5),
+    this._bluetoothPicker,
   }) : _coreMidi = coreMidi ?? MidiCoreMidiNative();
 
   // ...........................................................................
@@ -77,6 +90,9 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
     _network?.close();
     _bluetooth = null;
     _network = null;
+    for (final port in _taps.keys.toList()) {
+      await detachNativeTap(port);
+    }
     for (final input in _inputs.values) {
       _quietly(
         () => _coreMidi.disconnectSource(input.ref, protocol: input.protocol),
@@ -103,36 +119,91 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
     _running;
     final own = _own[port];
     if (own != null) {
-      if (own.refCon != null) _receiving[own.refCon!] = port;
+      if (own.refCon != null) _listen(port, own.refCon!);
       return;
     }
     final info = _setup.portOf(port) ?? (throw MidiPortGone(port));
-    if (info.isOutput || _inputs.containsKey(port)) return;
-    final ref = _setup.endpoints[port]!.ref;
-    final protocol = MidiCoreMidiSetup.protocolIdOf(info.protocol);
-    final refCon = _nextRefCon++;
-    _coreMidi.connectSource(ref, protocol: protocol, refCon: refCon);
-    _inputs[port] = (refCon: refCon, ref: ref, protocol: protocol);
-    _receiving[refCon] = port;
+    if (info.isOutput) return;
+    final input = _inputs[port] ?? _connect(port, info);
+    _listen(port, input.refCon);
   }
 
+  /// Closes [port]; a source with a native tap stays connected for it.
   @override
   Future<void> closePort(MidiPortId port) async {
     _running;
     final own = _own[port];
     if (own != null) {
-      _receiving.remove(own.refCon);
+      if (own.refCon != null) _unlisten(port, own.refCon!);
       return;
     }
-    final input = _inputs.remove(port);
+    final input = _inputs[port];
     if (input != null) {
-      _receiving.remove(input.refCon);
-      _quietly(
-        () => _coreMidi.disconnectSource(input.ref, protocol: input.protocol),
-      );
+      _unlisten(port, input.refCon);
+      if (!_taps.containsKey(port)) _disconnect(port);
       return;
     }
     if (_setup.portOf(port) == null) throw MidiPortGone(port);
+  }
+
+  // ...........................................................................
+  /// Returns whether [port] is a CoreMIDI source or an own destination.
+  @override
+  bool supportsNativeTap(MidiPortId port) =>
+      _own[port]?.refCon != null || (_setup.portOf(port)?.isInput ?? false);
+
+  /// Connects the source of [port] when needed and attaches [tap] in the
+  /// shim.
+  ///
+  /// Throws a [MidiPortGone] for an unknown port, an [ArgumentError] for an
+  /// output, a [StateError] when a tap is attached already and a
+  /// [MidiNativeError] when CoreMIDI refuses the connection or the shim has
+  /// no free slot.
+  @override
+  Future<void> attachNativeTap(MidiPortId port, MidiNativeTap tap) async {
+    _running;
+    if (_taps.containsKey(port)) throw StateError('$port has a tap already');
+    final (:refCon, :source, :isOwn) = _tapTarget(port);
+    try {
+      _coreMidi.attachTap(
+        refCon: refCon,
+        source: source,
+        tap: tap,
+        ring: _receiving.containsKey(refCon),
+      );
+    } on MidiNativeError {
+      if (!isOwn && !_receiving.containsKey(refCon)) _disconnect(port);
+      rethrow;
+    }
+    _taps[port] = (refCon: refCon, tap: tap);
+  }
+
+  /// Detaches the tap of [port] after its last call; the source disconnects
+  /// when no listener holds the port. Throws a [MidiPortGone] for an
+  /// unknown port without a tap.
+  @override
+  Future<void> detachNativeTap(MidiPortId port) async {
+    final host = _running;
+    final tap = _taps.remove(port);
+    if (tap == null) {
+      if (_own[port] == null && _setup.portOf(port) == null) {
+        throw MidiPortGone(port);
+      }
+      return;
+    }
+    if (!_coreMidi.detachTap(tap.refCon)) {
+      host.diagnostic(
+        MidiDiagnostic(
+          kind: MidiDiagnosticKind.nativeError,
+          port: port,
+          cause: 'The native tap did not return; its slot in the shim leaks',
+          time: host.clock.now(),
+        ),
+      );
+    }
+    if (!_receiving.containsKey(tap.refCon) && _inputs.containsKey(port)) {
+      _disconnect(port);
+    }
   }
 
   // ...........................................................................
@@ -283,6 +354,7 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
   // ...........................................................................
   final MidiCoreMidi _coreMidi;
   final MidiCoreBluetooth? _coreBluetooth;
+  final Future<void> Function()? _bluetoothPicker;
   final MidiAppleNetworkSession? _networkSession;
   final MidiBonjourBrowser Function()? _bonjourBrowser;
 
@@ -300,11 +372,64 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
   final _own =
       <MidiPortId, ({MidiPortInfo port, int ref, int protocol, int? refCon})>{};
   final _receiving = <int, MidiPortId>{};
+  final _taps = <MidiPortId, ({int refCon, MidiNativeTap tap})>{};
   final _bluetoothWaiters =
       <({String name, Completer<List<MidiPortInfo>> completer})>[];
 
   MidiBackendHost get _running =>
       _host ?? (throw StateError('The backend is not running'));
+
+  /// Connects the source of the input [port] described by [info] and
+  /// returns the connection.
+  ({int refCon, int ref, int protocol}) _connect(
+    MidiPortId port,
+    MidiPortInfo info,
+  ) {
+    final ref = _setup.endpoints[port]!.ref;
+    final protocol = MidiCoreMidiSetup.protocolIdOf(info.protocol);
+    final refCon = _nextRefCon++;
+    _coreMidi.connectSource(ref, protocol: protocol, refCon: refCon);
+    return _inputs[port] = (refCon: refCon, ref: ref, protocol: protocol);
+  }
+
+  /// Returns the ref con and the endpoint a tap of [port] attaches to and
+  /// connects the source when needed. Throws a [MidiPortGone] for an
+  /// unknown port and an [ArgumentError] for an output.
+  ({int refCon, int source, bool isOwn}) _tapTarget(MidiPortId port) {
+    final own = _own[port];
+    if (own != null) {
+      final refCon = own.refCon ?? (throw _notAnInput(port));
+      return (refCon: refCon, source: own.ref, isOwn: true);
+    }
+    final info = _setup.portOf(port) ?? (throw MidiPortGone(port));
+    if (info.isOutput) throw _notAnInput(port);
+    final input = _inputs[port] ?? _connect(port, info);
+    return (refCon: input.refCon, source: input.ref, isOwn: false);
+  }
+
+  static ArgumentError _notAnInput(MidiPortId port) =>
+      ArgumentError.value(port, 'port', 'Not an input');
+
+  /// Disconnects the source of [port].
+  void _disconnect(MidiPortId port) {
+    final input = _inputs.remove(port);
+    if (input == null) return;
+    _quietly(
+      () => _coreMidi.disconnectSource(input.ref, protocol: input.protocol),
+    );
+  }
+
+  /// Delivers the packets of [refCon] to the host as [port], next to a tap.
+  void _listen(MidiPortId port, int refCon) {
+    _receiving[refCon] = port;
+    if (_taps.containsKey(port)) _coreMidi.setTapRing(refCon, ring: true);
+  }
+
+  /// Stops delivering the packets of [refCon] to the host.
+  void _unlisten(MidiPortId port, int refCon) {
+    _receiving.remove(refCon);
+    if (_taps.containsKey(port)) _coreMidi.setTapRing(refCon, ring: false);
+  }
 
   MidiCoreMidiSetup _readSetup() => MidiCoreMidiSetup.fromSnapshot(
     _coreMidi.snapshot(),
@@ -420,6 +545,9 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
           ref: endpoint.ref,
           protocol: protocol,
         );
+        if (_taps.containsKey(port)) {
+          _coreMidi.setTapSource(input.refCon, endpoint.ref);
+        }
       } on MidiNativeError catch (error) {
         _running.diagnostic(
           MidiDiagnostic(
@@ -442,6 +570,7 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
       disconnectDriver: _coreMidi.disconnectBluetooth,
       waitForPorts: _waitForBluetoothPorts,
       readyTimeout: bluetoothTimeout,
+      showPicker: _bluetoothPicker ?? showMidiBluetoothPickerNative,
     );
   }
 
@@ -474,9 +603,10 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
       timeout,
       onTimeout: () {
         _bluetoothWaiters.remove(waiter);
-        throw const MidiNativeError(
-          api: 'MIDIBluetoothDriverActivateAllConnections',
-          code: _objectNotFound,
+        final device = name.isEmpty ? '' : '"$name" ';
+        throw MidiTimeout(
+          'The CoreMIDI Bluetooth device ${device}did not appear',
+          timeout,
         );
       },
     );
@@ -485,18 +615,58 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
   /// Completes the waiters whose Bluetooth device is online with ports.
   void _serveBluetoothWaiters() {
     for (final waiter in _bluetoothWaiters.toList()) {
-      final ports = [
-        for (final device in _setup.devices)
-          if (device.transport == MidiTransport.bluetoothLe &&
-              !device.isOffline &&
-              (waiter.name.isEmpty || device.name == waiter.name))
-            for (final port in device.ports) _setup.portOf(port)!,
-      ];
+      final ports = _bluetoothPortsNamed(waiter.name);
       if (ports.isEmpty) continue;
       _bluetoothWaiters.remove(waiter);
       waiter.completer.complete(ports);
     }
   }
+
+  /// Returns the ports of the online Bluetooth devices whose name matches
+  /// [wanted] best: the exact matches, failing those the matches by prefix,
+  /// and as a last resort the names containing the other.
+  List<MidiPortInfo> _bluetoothPortsNamed(String wanted) {
+    final byMatch = <int, List<MidiDeviceInfo>>{};
+    for (final device in _setup.devices) {
+      if (device.transport != MidiTransport.bluetoothLe) continue;
+      if (device.isOffline) continue;
+      final match = _nameMatch(device.name, wanted);
+      if (match != _noMatch) byMatch.putIfAbsent(match, () => []).add(device);
+    }
+    if (byMatch.isEmpty) return const [];
+    final best = byMatch[byMatch.keys.reduce(math.max)]!;
+    return [
+      for (final device in best)
+        for (final port in device.ports) _setup.portOf(port)!,
+    ];
+  }
+
+  /// How well the CoreMIDI device name [device] matches the advertised
+  /// name [wanted], ignoring case and blanks around: [_exactMatch],
+  /// [_prefixMatch] when one name starts with the other (the CoreMIDI name
+  /// may carry a suffix), [_containsMatch] when one contains the other and
+  /// both have at least [_minContainsLength] characters, else [_noMatch].
+  /// An empty [wanted] matches every name.
+  static int _nameMatch(String device, String wanted) {
+    final a = device.trim().toLowerCase();
+    final b = wanted.trim().toLowerCase();
+    if (b.isEmpty) return _exactMatch;
+    if (a.isEmpty) return _noMatch;
+    if (a == b) return _exactMatch;
+    if (a.startsWith(b) || b.startsWith(a)) return _prefixMatch;
+    if (a.length < _minContainsLength || b.length < _minContainsLength) {
+      return _noMatch;
+    }
+    return a.contains(b) || b.contains(a) ? _containsMatch : _noMatch;
+  }
+
+  static const int _noMatch = 0;
+  static const int _containsMatch = 1;
+  static const int _prefixMatch = 2;
+  static const int _exactMatch = 3;
+
+  /// The shortest name that may match by containing the other.
+  static const int _minContainsLength = 3;
 
   /// Runs [call] and ignores its native error; used while tearing down.
   static void _quietly(void Function() call) {
@@ -506,7 +676,4 @@ final class AppleMidiBackend implements MidiBackend, MidiVirtualPortsBackend {
       // The endpoint is gone already.
     }
   }
-
-  /// `kMIDIObjectNotFound`.
-  static const int _objectNotFound = -10842;
 }

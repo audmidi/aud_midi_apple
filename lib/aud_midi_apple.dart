@@ -11,6 +11,7 @@ library;
 
 export 'src/apple_midi_backend.dart';
 export 'src/bluetooth/midi_apple_bluetooth_backend.dart';
+export 'src/bluetooth/midi_bluetooth_picker_native.dart';
 export 'src/bluetooth/midi_core_bluetooth.dart';
 export 'src/bluetooth/midi_core_bluetooth_native.dart';
 export 'src/core_midi/midi_core_midi.dart';

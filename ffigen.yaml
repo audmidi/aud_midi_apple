@@ -16,6 +16,9 @@ description: Bindings for CoreMIDI and the aud_midi_apple C shim.
 output: lib/src/native/aud_midi_apple_bindings.g.dart
 language: c
 compiler-opts:
+  # The SDK of Xcode 26 names a platform libclang does not know; ffigen
+  # drops the declarations of a header with any diagnostic.
+  - -Wno-availability
   - -isysroot
   - /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
   - -F/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks
@@ -58,9 +61,13 @@ functions:
     - CFStringGetCharacters
     - CFStringCreateWithCharacters
     - CFRelease
+  exclude:
+    # The slot table behind the client functions, for the native tests only.
+    - aud_midi_apple_taps_.*
   leaf:
     include:
       - aud_midi_apple_now
+      - aud_midi_apple_ticks_to_ns
       - aud_midi_apple_ump_size
       - aud_midi_apple_read_packets
       - aud_midi_apple_read_notifications
@@ -85,6 +92,7 @@ typedefs:
   include:
     - AudMidiAppleSignal
     - AudMidiAppleBrowseCallback
+    - AudMidiAppleTapFunction
 macros:
   include:
     - AUD_MIDI_APPLE_.*

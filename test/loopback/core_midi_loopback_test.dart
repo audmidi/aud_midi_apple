@@ -9,14 +9,25 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:aud_midi_apple/aud_midi_apple.dart';
 import 'package:aud_midi_apple/src/native/aud_midi_apple_bindings.g.dart'
-    show MIDIFlushOutput;
+    as native
+    show
+        AUD_MIDI_APPLE_PROBE_VALUES,
+        AudMidiAppleProbe,
+        MIDIFlushOutput,
+        aud_midi_apple_probe_create,
+        aud_midi_apple_probe_free,
+        aud_midi_apple_probe_function,
+        aud_midi_apple_probe_read,
+        aud_midi_apple_ticks_to_ns;
 import 'package:aud_midi_core/aud_midi_core.dart';
 import 'package:aud_midi_standard/aud_midi_standard.dart';
+import 'package:ffi/ffi.dart';
 import 'package:test/test.dart';
 
 // Real CoreMIDI loopback between two backends of this process, the way two
@@ -253,7 +264,7 @@ void main() {
         protocol: 1,
         refCon: 1,
       );
-      expect(MIDIFlushOutput(destination), 0);
+      expect(native.MIDIFlushOutput(destination), 0);
       final words = <int>[];
       final deadline = DateTime.now().add(const Duration(seconds: 2));
       while (words.isEmpty && DateTime.now().isBefore(deadline)) {
@@ -353,6 +364,130 @@ void main() {
     });
   });
 
+  group('native taps', () {
+    late _Probe probe;
+
+    setUp(() => probe = _Probe());
+
+    tearDown(() => probe.free());
+
+    test('receive every packet with host times, without a listener', () async {
+      final name = 'aud loop tap $suffix';
+      final source = await a.create(
+        MidiVirtualPortSpec(
+          name: name,
+          direction: MidiDirection.output,
+          protocol: MidiProtocol.midi2,
+        ),
+      );
+      final input = await portNamed(hostB, b, name, MidiDirection.input);
+      expect(b.supportsNativeTap(input.id), isTrue);
+      await b.attachNativeTap(input.id, probe.tap);
+      final messages = [
+        [0x40903c00, 0xc8000000],
+        [0x40b00700, 0x80000000],
+        [0x40803c00, 0x00000000],
+      ];
+      final base = hostA.clock.now() + const Duration(milliseconds: 20);
+      for (var i = 0; i < messages.length; i++) {
+        await a.send(
+          source.id,
+          packet(messages[i], base + Duration(milliseconds: i)),
+        );
+      }
+      await probe.until(() => probe.words >= 6);
+      expect(probe.umpCalls, 3);
+      expect(probe.words, 6);
+      expect(
+        probe.sum,
+        [for (final m in messages) ...m].fold<int>(0, (a, b) => a + b),
+      );
+      expect(probe.first, 0x40803c00);
+      expect(probe.minDelayNs, greaterThanOrEqualTo(-1000));
+      // The timestamps are the sent times, on the host clock in ns.
+      final nowNs = native.aud_midi_apple_ticks_to_ns(
+        MidiCoreMidiNative().now(),
+      );
+      expect((nowNs - probe.lastTimeNs).abs(), lessThan(1000000000));
+      // No listener: nothing reached Dart.
+      expect(hostB.packets, isEmpty);
+      report['tap_delivery_delay_ns'] = probe.minDelayNs;
+      // With a listener both get the packets; the tap stays after close.
+      await b.openPort(input.id);
+      await a.send(source.id, packet(messages[0], hostA.clock.now()));
+      await hostB.until(() => hostB.packets.isNotEmpty);
+      await probe.until(() => probe.words >= 8);
+      expect(probe.words, 8);
+      await b.closePort(input.id);
+      await a.send(source.id, packet(messages[0], hostA.clock.now()));
+      await probe.until(() => probe.words >= 10);
+      expect(probe.words, 10);
+      expect(hostB.packets, hasLength(1));
+      await b.detachNativeTap(input.id);
+    });
+
+    test('detach under traffic lets no call through afterwards', () async {
+      final name = 'aud loop tap detach $suffix';
+      final source = await a.create(
+        MidiVirtualPortSpec(name: name, direction: MidiDirection.output),
+      );
+      final input = await portNamed(hostB, b, name, MidiDirection.input);
+      await b.attachNativeTap(input.id, probe.tap);
+      final burst = [for (var i = 0; i < 16; i++) 0x20903c00 | i];
+      var sending = true;
+      final sender = () async {
+        while (sending) {
+          await a.send(source.id, packet(burst, hostA.clock.now()));
+          await Future<void>.delayed(Duration.zero);
+        }
+      }();
+      await probe.until(() => probe.umpCalls >= 50);
+      await b.detachNativeTap(input.id);
+      final calls = probe.umpCalls;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      sending = false;
+      await sender;
+      expect(probe.umpCalls, calls);
+      expect(probe.overlaps, 0);
+      // The slot is free again: a second tap attaches.
+      await b.attachNativeTap(input.id, probe.tap);
+      await b.detachNativeTap(input.id);
+      report['tap_calls_before_detach'] = calls;
+    });
+
+    test('report gone when the source goes and survive its return', () async {
+      final name = 'aud loop tap gone $suffix';
+      final uniqueId = 0x6b000000 + suffix % 0xffff;
+      final spec = MidiVirtualPortSpec(
+        name: name,
+        direction: MidiDirection.output,
+        uniqueId: uniqueId,
+      );
+      var source = await a.create(spec);
+      final input = await portNamed(hostB, b, name, MidiDirection.input);
+      await b.attachNativeTap(input.id, probe.tap);
+      final stopwatch = Stopwatch()..start();
+      await a.remove(source.id);
+      await probe.until(() => probe.goneCalls >= 1);
+      report['tap_gone_latency_ms'] = stopwatch.elapsedMilliseconds;
+      expect(probe.goneCalls, 1);
+      // Dart learns the removal later, the tap stays attached meanwhile.
+      await hostB.until(() => b.ports.every((p) => p.id != input.id));
+      expect(b.supportsNativeTap(input.id), isFalse);
+      // The source comes back under its unique id: the tap gets its data.
+      source = await a.create(spec);
+      await portNamed(hostB, b, name, MidiDirection.input);
+      await a.send(source.id, packet([0x20903c64], hostA.clock.now()));
+      await probe.until(() => probe.words >= 1);
+      expect(probe.words, 1);
+      expect(probe.goneCalls, 1);
+      await a.remove(source.id);
+      await probe.until(() => probe.goneCalls >= 2);
+      expect(probe.goneCalls, 2);
+      await b.detachNativeTap(input.id);
+    });
+  });
+
   group('network session', () {
     test(
       'follows MIDINetworkSession when AUD_MIDI_TEST_NETWORK=1',
@@ -382,6 +517,55 @@ void main() {
           : 'changes a global setting; set AUD_MIDI_TEST_NETWORK=1',
     );
   });
+}
+
+// #############################################################################
+/// The probe tap of the shim, read from Dart: UMP calls, byte calls, gone
+/// calls, words, bytes, the last time, the sum, the first word, overlaps
+/// and the smallest delay.
+final class _Probe {
+  _Probe()
+    : pointer = native.aud_midi_apple_probe_create(),
+      _values = calloc<Int64>(native.AUD_MIDI_APPLE_PROBE_VALUES);
+
+  final Pointer<native.AudMidiAppleProbe> pointer;
+  final Pointer<Int64> _values;
+
+  MidiNativeTap get tap => MidiNativeTap(
+    function: native.aud_midi_apple_probe_function().address,
+    user: pointer.address,
+  );
+
+  List<int> read() {
+    native.aud_midi_apple_probe_read(
+      pointer,
+      _values,
+      native.AUD_MIDI_APPLE_PROBE_VALUES,
+    );
+    return _values.asTypedList(native.AUD_MIDI_APPLE_PROBE_VALUES).toList();
+  }
+
+  int get umpCalls => read()[0];
+  int get goneCalls => read()[2];
+  int get words => read()[3];
+  int get lastTimeNs => read()[5];
+  int get sum => read()[6];
+  int get first => read()[7];
+  int get overlaps => read()[8];
+  int get minDelayNs => read()[9];
+
+  /// Waits up to five seconds until [done] holds.
+  Future<void> until(bool Function() done) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (!done() && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
+
+  void free() {
+    native.aud_midi_apple_probe_free(pointer);
+    calloc.free(_values);
+  }
 }
 
 // #############################################################################

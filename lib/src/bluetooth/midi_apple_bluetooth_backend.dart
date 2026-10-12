@@ -29,19 +29,28 @@ typedef MidiBluetoothPortsWaiter =
 /// the connection with `MIDIBluetoothDriverActivateAllConnections`, wait for
 /// the CoreMIDI device and its ports, then end the CoreBluetooth connection,
 /// because CoreMIDI owns one of its own from then on.
-final class MidiAppleBluetoothBackend implements MidiBluetoothBackend {
+///
+/// With a picker, [showSystemDevicePicker] also offers the device
+/// picker of iOS, which pairs and connects without these steps.
+final class MidiAppleBluetoothBackend
+    implements MidiBluetoothBackend, MidiBluetoothSystemPicker {
   /// Creates the support on top of the CoreBluetooth [central].
   ///
   /// - [activate] promotes connected peripherals to CoreMIDI devices.
   /// - [disconnectDriver] disconnects CoreMIDI from a peripheral.
   /// - [waitForPorts] waits for the CoreMIDI device of a peripheral.
   /// - [readyTimeout] how long to wait for the power state of Bluetooth.
+  /// - [showPicker] shows the device picker of the operating system.
+  /// - [activateInterval] how often the activation repeats while waiting
+  ///   for the CoreMIDI device, e.g. until the user accepted the pairing.
   MidiAppleBluetoothBackend({
     required this.central,
     required this._activate,
     required this._disconnectDriver,
     required this._waitForPorts,
     this.readyTimeout = const Duration(seconds: 5),
+    this._showPicker,
+    this.activateInterval = const Duration(seconds: 1),
   });
 
   // ...........................................................................
@@ -74,7 +83,8 @@ final class MidiAppleBluetoothBackend implements MidiBluetoothBackend {
   ///
   /// Throws a `MidiPermissionDenied` when the app may not use Bluetooth, a
   /// `MidiUnsupported` when Bluetooth is not powered on and a
-  /// `MidiNativeError` when connecting fails or takes longer than
+  /// `MidiNativeError` when CoreBluetooth cannot connect and a
+  /// `MidiException` when the CoreMIDI device does not appear within
   /// [timeout].
   @override
   Future<List<MidiPortInfo>> connect(
@@ -85,6 +95,9 @@ final class MidiAppleBluetoothBackend implements MidiBluetoothBackend {
     final elapsed = Stopwatch()..start();
     if (!await _ready()) throw const MidiUnsupported('Bluetooth (powered off)');
     final event = await _connectCentral(peripheralId, timeout);
+    // A peripheral that asks for pairing becomes a CoreMIDI device only when
+    // activated after the user accepted, so the activation repeats.
+    final reactivate = Timer.periodic(activateInterval, (_) => _tryActivate());
     try {
       _activate();
       return await _waitForPorts(
@@ -92,8 +105,19 @@ final class MidiAppleBluetoothBackend implements MidiBluetoothBackend {
         timeout: timeout - elapsed.elapsed,
       );
     } finally {
+      reactivate.cancel();
       central.cancelConnection(peripheralId);
     }
+  }
+
+  // ...........................................................................
+  /// Shows the Bluetooth MIDI device picker of iOS and completes once the
+  /// user dismissed it; throws [pickerUnsupported] where there is none.
+  @override
+  Future<void> showSystemDevicePicker() async {
+    _checkPermission();
+    final show = _showPicker ?? (throw pickerUnsupported);
+    await show();
   }
 
   @override
@@ -124,10 +148,21 @@ final class MidiAppleBluetoothBackend implements MidiBluetoothBackend {
   /// How long to wait for the power state of Bluetooth.
   final Duration readyTimeout;
 
+  /// How often the activation repeats while waiting for the CoreMIDI device.
+  final Duration activateInterval;
+
+  // ...........................................................................
+  /// The error of [showSystemDevicePicker] where the operating system has
+  /// no Bluetooth MIDI device picker, e.g. on macOS.
+  static const MidiUnsupported pickerUnsupported = MidiUnsupported(
+    'Bluetooth MIDI device picker',
+  );
+
   // ...........................................................................
   final void Function() _activate;
   final void Function(String peripheralId) _disconnectDriver;
   final MidiBluetoothPortsWaiter _waitForPorts;
+  final Future<void> Function()? _showPicker;
 
   bool _isOpen = false;
   int _state = 0;
@@ -136,6 +171,14 @@ final class MidiAppleBluetoothBackend implements MidiBluetoothBackend {
   Timer? _scanTimer;
   final _names = <String, String>{};
   final _connecting = <String, Completer<MidiCoreBluetoothEvent>>{};
+
+  void _tryActivate() {
+    try {
+      _activate();
+    } on MidiException {
+      // The next round or the timeout reports the failure.
+    }
+  }
 
   void _checkPermission() {
     if (central.isDenied) {

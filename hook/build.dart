@@ -20,8 +20,19 @@ void main(List<String> args) async {
     await CBuilder.library(
       name: 'aud_midi_apple',
       assetName: 'src/native/aud_midi_apple_bindings.g.dart',
-      sources: const ['src/aud_midi_apple.c', 'src/aud_midi_apple_objc.g.m'],
-      frameworks: const ['CoreFoundation', 'CoreMIDI', 'Foundation'],
+      sources: const [
+        'src/aud_midi_apple.c',
+        'src/aud_midi_apple_tap.c',
+        'src/aud_midi_apple_objc.g.m',
+        'src/aud_midi_apple_bluetooth_picker.m',
+      ],
+      frameworks: [
+        'CoreFoundation',
+        'CoreMIDI',
+        'Foundation',
+        // The Bluetooth MIDI device picker exists on iOS only.
+        if (os == OS.iOS) ...['CoreAudioKit', 'UIKit'],
+      ],
       flags: const ['-fobjc-arc'],
     ).run(input: input, output: output);
   });

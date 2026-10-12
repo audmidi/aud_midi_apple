@@ -16,13 +16,17 @@
 // - copies every received MIDIEventPacket into a ring buffer of the client
 //   and signals Dart through a NativeCallable.listener function pointer,
 // - builds MIDIEventLists for sending,
-// - and offers a "closed" handshake so that Dart can wait until no
-//   callback is in flight before it closes the NativeCallable.
+// - offers a "closed" handshake so that Dart can wait until no callback is
+//   in flight before it closes the NativeCallable,
+// - and calls native taps (aud_midi_apple_tap.h) on the receive thread
+//   with the packets of a source, with "gone" from the notification thread.
 
 #ifndef AUD_MIDI_APPLE_H
 #define AUD_MIDI_APPLE_H
 
 #include <stdint.h>
+
+#include "aud_midi_apple_tap.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -165,6 +169,13 @@ int32_t aud_midi_apple_bluetooth_activate_all(void);
 /// AUD_MIDI_APPLE_UNSUPPORTED_ERROR before macOS 13 and iOS 16.
 int32_t aud_midi_apple_bluetooth_disconnect(const char *uuid);
 
+/// Presents Apple's Bluetooth MIDI device picker
+/// (CABTMIDICentralViewController) with a Done button on the main thread of
+/// iOS; calls [done] with 0 once it is dismissed, or with
+/// AUD_MIDI_APPLE_UNSUPPORTED_ERROR when no view controller can present it.
+/// Returns 0, or AUD_MIDI_APPLE_UNSUPPORTED_ERROR at once on macOS.
+int32_t aud_midi_apple_show_bluetooth_picker(AudMidiAppleSignal done);
+
 /// The browse event of a resolved service: name, host and port.
 #define AUD_MIDI_APPLE_BROWSE_FOUND 1
 
@@ -217,6 +228,49 @@ uint64_t aud_midi_apple_now(void);
 /// Stores the numerator and the denominator that convert mach ticks to
 /// nanoseconds.
 void aud_midi_apple_timebase(uint32_t *numer, uint32_t *denom);
+
+/// Returns [ticks] in nanoseconds of the host clock, computed in 128-bit
+/// integers: the time of the native taps.
+uint64_t aud_midi_apple_ticks_to_ns(uint64_t ticks);
+
+// .............................................................................
+// Native taps
+
+/// Attaches the tap [function] with [user] to the packets that reach
+/// [client] with [ref_con] from the source [source]: the receive thread
+/// calls it once per MIDIEventPacket with the UMP words
+/// (AUD_MIDI_APPLE_TAP_UMP) and the timestamp in nanoseconds (0 becomes
+/// the arrival time), and the notification thread reports
+/// AUD_MIDI_APPLE_TAP_GONE when the source is removed or goes offline.
+/// With [ring] 1 the packets go to the ring buffer as well, with 0 to the
+/// tap only. Returns 0, AUD_MIDI_APPLE_PARAM_ERROR or
+/// AUD_MIDI_APPLE_TAP_FULL_ERROR.
+int32_t aud_midi_apple_tap_attach(AudMidiAppleClient *client,
+                                  uint32_t ref_con, uint32_t source,
+                                  AudMidiAppleTapFunction function,
+                                  void *user, int32_t ring);
+
+/// Detaches the tap of [ref_con]: no call starts afterwards, and the
+/// function returns only after the calls in flight returned, waiting up to
+/// [timeout_ms]. Returns 0, AUD_MIDI_APPLE_PARAM_ERROR, or
+/// AUD_MIDI_APPLE_TIMEOUT_ERROR when a call did not return (the slot is
+/// leaked, never freed, and a line is logged).
+int32_t aud_midi_apple_tap_detach(AudMidiAppleClient *client,
+                                  uint32_t ref_con, int32_t timeout_ms);
+
+/// Sets whether the packets of [ref_con] go to the ring buffer as well.
+int32_t aud_midi_apple_tap_set_ring(AudMidiAppleClient *client,
+                                    uint32_t ref_con, int32_t ring);
+
+/// Tells the tap of [ref_con] its new [source] after the source came back
+/// under another endpoint, so that the next offline is reported again.
+int32_t aud_midi_apple_tap_set_source(AudMidiAppleClient *client,
+                                      uint32_t ref_con, uint32_t source);
+
+/// Returns the number of packets the tap of [ref_con] dropped because a
+/// call was running already since the last call, and resets it.
+uint64_t aud_midi_apple_tap_take_dropped(AudMidiAppleClient *client,
+                                         uint32_t ref_con);
 
 #ifdef __cplusplus
 }

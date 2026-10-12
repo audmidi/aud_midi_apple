@@ -19,7 +19,7 @@ dev_dependencies:
   ffigen: ^23.0.0
   helix: ^1.11.0
   lints: ^6.1.0
-  test: ^1.32.0
+  test: ^1.33.0
 dependencies:
   aud_midi_core: ^0.1.1
   aud_midi_standard: ^0.1.0

@@ -6,5 +6,3 @@
 dependency_overrides:
   aud_midi_core:
     path: ../aud_midi_core
-  aud_midi_standard:
-    path: ../aud_midi_standard

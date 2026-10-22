@@ -6,6 +6,10 @@
 
 - Refuse the Bluetooth picker off Apple platforms
 - Document the Windows behavior in both languages
+- Refuse the Bluetooth picker off Apple platforms
+
+showMidiBluetoothPickerNative throws pickerUnsupported where no shim is built
+check-notices.js names files with /
 
 ## 0.1.1 - 2026-10-12
 

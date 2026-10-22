@@ -21,7 +21,7 @@
 // Exits with 1 and the list of problems when the convention is broken.
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const permissive = [
@@ -116,7 +116,7 @@ export function checkNotices(repoDir) {
       if (file.endsWith('.g.m')) continue;
       const head = readFileSync(file, 'utf-8').slice(0, 400);
       if (!head.includes('@license') || !header.test(head)) {
-        problems.push(`${relative(repoDir, file)} has no license header`);
+        problems.push(`${relative(repoDir, file).split(sep).join('/')} has no license header`);
       }
     }
   }

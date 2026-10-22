@@ -5,6 +5,7 @@
 ### Changed
 
 - Refuse the Bluetooth picker off Apple platforms
+- Document the Windows behavior in both languages
 
 ## 0.1.1 - 2026-10-12
 

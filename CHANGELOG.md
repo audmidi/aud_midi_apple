@@ -1,15 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 - 2026-10-24
 
 ### Changed
 
 - Refuse the Bluetooth picker off Apple platforms
 - Document the Windows behavior in both languages
 - Refuse the Bluetooth picker off Apple platforms
-
-showMidiBluetoothPickerNative throws pickerUnsupported where no shim is built
-check-notices.js names files with /
 
 ## 0.1.1 - 2026-10-12
 
@@ -52,7 +49,6 @@ check-notices.js names files with /
 - aud_midi_core ^0.2.0
 
 - Add independent constraints on the aud_midi packages
-
 
 ## 0.1.0 - 2026-10-07
 

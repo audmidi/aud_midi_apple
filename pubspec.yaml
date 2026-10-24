@@ -1,6 +1,6 @@
 name: aud_midi_apple
 description: "CoreMIDI, CoreBluetooth and network session backend for aud_midi on macOS and iOS"
-version: 0.1.1
+version: 0.1.2
 homepage: https://github.com/audmidi/aud_midi_apple
 repository: https://github.com/audmidi/aud_midi_apple
 topics:
@@ -17,12 +17,12 @@ environment:
 dev_dependencies:
   dna_audanika: ^0.0.2
   ffigen: ^23.0.0
-  helix: ^1.11.0
+  helix: ^1.13.0
   lints: ^6.1.0
   test: ^1.33.0
 dependencies:
-  aud_midi_core: ^0.1.1
-  aud_midi_standard: ^0.1.0
+  aud_midi_core: ^0.1.3
+  aud_midi_standard: ^0.1.1
   code_assets: ^2.1.0
   ffi: ^2.2.0
   hooks: ^2.2.0

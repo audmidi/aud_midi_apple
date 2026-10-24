@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 - 2026-10-24
+
+### Changed
+
+- Refuse the Bluetooth picker off Apple platforms
+- Document the Windows behavior in both languages
+- Refuse the Bluetooth picker off Apple platforms
+
 ## 0.1.1 - 2026-10-12
 
 ### Added

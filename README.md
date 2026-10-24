@@ -62,7 +62,9 @@ Part of the aud_midi family, see [aud_midi](https://github.com/audmidi/aud_midi)
   presents Apple's `CABTMIDICentralViewController`, which pairs and
   connects without these steps; `showMidiBluetoothPickerNative` does the
   presenting, and the `bluetoothPicker` parameter of `AppleMidiBackend`
-  replaces it, e.g. in tests. On macOS the picker throws `MidiUnsupported`.
+  replaces it, e.g. in tests. On macOS the picker throws `MidiUnsupported`,
+  as `showMidiBluetoothPickerNative` does off Apple platforms, which build
+  no shim; its `present` parameter is optional.
 - Network: `MIDINetworkSession` on iOS; `browse()` through DNS-SD;
   `MidiBonjourAdvertiser` implements `MidiServiceAdvertiser`.
 

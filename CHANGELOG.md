@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Require Dart 3.13 and upgrade the dependencies
+
+- Require Dart 3.13
+- Upgrade dna_audanika to ^0.1.0
+- Upgrade helix to ^1.14.0
+- Add the quick check pipeline name to dna/_vars.json
+- Exclude the off-Apple branch of the picker from coverage
+- Reformat 6 files with the Dart 3.13 formatter
+- Add the blog post of this change, in English and German
+- Bring the README to the README template, in English and German
+- Replace organisation identifiers in examples by placeholders
+
 ## 0.1.2 - 2026-10-24
 
 ### Changed
@@ -49,6 +65,7 @@
 - aud_midi_core ^0.2.0
 
 - Add independent constraints on the aud_midi packages
+
 
 ## 0.1.0 - 2026-10-07
 

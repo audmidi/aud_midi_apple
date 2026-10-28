@@ -16,6 +16,7 @@
 library;
 
 import 'dart:ffi' as ffi;
+
 import 'package:objective_c/objective_c.dart' as objc;
 import 'package:ffi/ffi.dart' as pkg_ffi;
 
@@ -5825,9 +5826,9 @@ final _class_CBManager = objc.getClass(
 external ffi.Pointer<objc.ObjCObjectImpl> _class_CBPeer_raw;
 final _class_CBPeer = objc.getClass(
   "CBPeer",
-  () => ffi.Native.addressOf<ffi.Pointer<objc.ObjCObjectImpl>>(
-    _class_CBPeer_raw,
-  ).cast(),
+  () =>
+      ffi.Native.addressOf<ffi.Pointer<objc.ObjCObjectImpl>>(_class_CBPeer_raw)
+          .cast(),
 );
 @ffi.Native<ffi.Pointer<objc.ObjCObjectImpl>>(
   symbol: 'OBJC_CLASS_\$_CBPeripheral',
@@ -5843,9 +5844,9 @@ final _class_CBPeripheral = objc.getClass(
 external ffi.Pointer<objc.ObjCObjectImpl> _class_CBUUID_raw;
 final _class_CBUUID = objc.getClass(
   "CBUUID",
-  () => ffi.Native.addressOf<ffi.Pointer<objc.ObjCObjectImpl>>(
-    _class_CBUUID_raw,
-  ).cast(),
+  () =>
+      ffi.Native.addressOf<ffi.Pointer<objc.ObjCObjectImpl>>(_class_CBUUID_raw)
+          .cast(),
 );
 @ffi.Native<ffi.Pointer<objc.ObjCObjectImpl>>(
   symbol: 'OBJC_CLASS_\$_MIDINetworkConnection',
@@ -5901,9 +5902,9 @@ final _class_NSOperationQueue = objc.getClass(
 external ffi.Pointer<objc.ObjCObjectImpl> _class_NSUUID_raw;
 final _class_NSUUID = objc.getClass(
   "NSUUID",
-  () => ffi.Native.addressOf<ffi.Pointer<objc.ObjCObjectImpl>>(
-    _class_NSUUID_raw,
-  ).cast(),
+  () =>
+      ffi.Native.addressOf<ffi.Pointer<objc.ObjCObjectImpl>>(_class_NSUUID_raw)
+          .cast(),
 );
 @ffi.Native<ffi.Pointer<objc.ObjCObjectImpl>>(
   symbol: 'OBJC_CLASS_\$__16o8reg_BlockArgs_1tz5yf',

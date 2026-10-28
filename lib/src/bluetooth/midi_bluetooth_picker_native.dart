@@ -13,8 +13,9 @@ import 'midi_apple_bluetooth_backend.dart';
 
 /// Presents the native picker and calls `done` with its result; returns 0 or
 /// the error of a picker that cannot be shown.
-typedef MidiBluetoothPickerPresenter =
-    int Function(Pointer<NativeFunction<Void Function(Int32)>> done);
+typedef MidiBluetoothPickerPresenter = int Function(
+  Pointer<NativeFunction<Void Function(Int32)>> done,
+);
 
 // .............................................................................
 /// Shows Apple's Bluetooth MIDI device picker
@@ -34,7 +35,10 @@ Future<void> showMidiBluetoothPickerNative({
       (Platform.isIOS || Platform.isMacOS
           ? native.aud_midi_apple_show_bluetooth_picker
           : null);
+  // Off Apple platforms there is no shim; the tests run on macOS only.
+  // coverage:ignore-start
   if (presenter == null) return Future.error(unsupported);
+  // coverage:ignore-end
   final completer = Completer<void>();
   late final NativeCallable<Void Function(Int32)> callable;
   callable = NativeCallable<Void Function(Int32)>.listener((int status) {

@@ -81,9 +81,8 @@ void main() {
   tearDownAll(() {
     final path = Platform.environment['AUD_MIDI_REPORT'];
     if (path == null || report.isEmpty) return;
-    File(
-      path,
-    ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(report));
+    File(path)
+        .writeAsStringSync(const JsonEncoder.withIndent('  ').convert(report));
   });
 
   group('virtual source → input port', () {

@@ -16,6 +16,7 @@
 library;
 
 import 'dart:ffi' as ffi;
+
 import 'package:objective_c/objective_c.dart' as objc;
 
 const _$objcVersionCheck = objc.ObjCVersionCheck(9, 6);

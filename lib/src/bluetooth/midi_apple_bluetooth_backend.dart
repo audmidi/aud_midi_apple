@@ -15,11 +15,10 @@ import 'midi_core_bluetooth.dart';
 /// Waits until CoreMIDI lists the Bluetooth device [name] (any Bluetooth
 /// device for an empty name) online and returns its ports; throws a
 /// `MidiException` after [timeout].
-typedef MidiBluetoothPortsWaiter =
-    Future<List<MidiPortInfo>> Function({
-      required String name,
-      required Duration timeout,
-    });
+typedef MidiBluetoothPortsWaiter = Future<List<MidiPortInfo>> Function({
+  required String name,
+  required Duration timeout,
+});
 
 // #############################################################################
 /// Connects Bluetooth LE MIDI peripherals to CoreMIDI (macOS 13, iOS 16).

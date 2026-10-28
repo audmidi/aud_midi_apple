@@ -38,9 +38,12 @@ final class MidiCoreBluetoothNative implements MidiCoreBluetooth {
     final delegate = CBCentralManagerDelegate$Builder.implementAsListener(
       centralManagerDidUpdateState_: (central) =>
           onEvent(_event(MidiCoreBluetooth.stateChanged, state: central.state)),
-      centralManager_didDiscoverPeripheral_advertisementData_RSSI_:
-          (central, peripheral, advertisement, rssi) =>
-              onEvent(_discovered(peripheral, advertisement, rssi)),
+      centralManager_didDiscoverPeripheral_advertisementData_RSSI_: (
+        central,
+        peripheral,
+        advertisement,
+        rssi,
+      ) => onEvent(_discovered(peripheral, advertisement, rssi)),
       centralManager_didConnectPeripheral_: (central, peripheral) =>
           onEvent(_event(MidiCoreBluetooth.connected, peripheral: peripheral)),
       centralManager_didFailToConnectPeripheral_error_:

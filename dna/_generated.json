@@ -5,7 +5,7 @@
       "name": "base",
       "package": "helix",
       "ecosystem": null,
-      "resolvedVersion": "1.13.0",
+      "resolvedVersion": "1.14.0",
       "via": null,
       "hash": "0x6883da335b415f9d"
     },
@@ -110,9 +110,13 @@
     "claudeMdInclude": null,
     "claudeMdFromDna": true
   },
-  "baseVersion": "1.13.0",
+  "baseVersion": "1.14.0",
   "baseHash": "0x6883da335b415f9d",
   "instances": [
+    {
+      "path": ".claude/CLAUDE_dna_gg.md",
+      "hash": "0xa02925c2acb04f6c"
+    },
     {
       "path": ".claude/hooks/pm-prompts.json",
       "hash": "0x988e344de6ee6200"

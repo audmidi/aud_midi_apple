@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-10-28
 
 ### Changed
 
@@ -77,7 +77,6 @@
 - aud_midi_core ^0.2.0
 
 - Add independent constraints on the aud_midi packages
-
 
 ## 0.1.0 - 2026-10-07
 

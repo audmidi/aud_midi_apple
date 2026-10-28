@@ -18,12 +18,12 @@ void main() {
   const portIds = [MidiPortId('coremidi:1'), MidiPortId('coremidi:2')];
   const studio = MidiNetworkHostInfo(
     name: 'Studio',
-    address: '10.0.0.2',
+    address: '192.0.2.2',
     port: 5004,
   );
   const studioHost = (
     name: 'Studio',
-    address: '10.0.0.2',
+    address: '192.0.2.2',
     port: 5004,
     isBonjour: false,
   );

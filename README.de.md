@@ -1,12 +1,23 @@
 # aud_midi_apple
 
-Das macOS- und iOS-Backend von aud_midi: CoreMIDI über FFI und einen
-kleinen C-Shim, Bluetooth-LE-MIDI über CoreBluetooth, die Netzwerk-Session
-von iOS und Bonjour.
+[English](README.md) | Deutsch
+
+CoreMIDI-, CoreBluetooth- und Netzwerk-Session-Backend für aud_midi auf
+macOS und iOS. CoreMIDI wird über FFI und einen kleinen C-Shim erreicht,
+Bluetooth-LE-MIDI über CoreBluetooth, die Netzwerk-Session von iOS und
+Bonjour über ihre Frameworks.
 
 Teil der aud_midi-Familie, siehe [aud_midi](https://github.com/audmidi/aud_midi).
 
-## Ziele
+## Motivation
+
+Dart- und Flutter-Apps sollen die MIDI-Geräte ihrer Nutzer auf macOS und
+iOS über dieselbe API erreichen wie auf jeder anderen Plattform, ohne
+eigene Platform-Channels oder nativen Code, und mit einem Timing, das eine
+beschäftigte App nicht stören kann: der Eingang behält den Zeitstempel,
+den CoreMIDI ihm gab, den Ausgang plant CoreMIDI. Andere Apps sollen die
+App als eigenes MIDI-Gerät sehen, als virtuelle Endpoints, als
+Netzwerk-Session und als Bluetooth-LE-Peripheral. Das Backend zielt auf:
 
 - CoreMIDI-Ports, virtuelle Endpoints, Hotplug, UMP in beide Richtungen
 - OS-Zeitstempel beim Empfang, CoreMIDI-Scheduling beim Senden
@@ -16,10 +27,188 @@ Teil der aud_midi-Familie, siehe [aud_midi](https://github.com/audmidi/aud_midi)
 - Native Taps: ein C-Consumer, den der Receive-Thread von CoreMIDI aufruft
 - BLE-Peripheral über CBPeripheralManager
 
-## Stand
+## Installation
+
+```bash
+dart pub add aud_midi_apple
+```
+
+iOS-Apps tragen in `Info.plist` ein: `UIBackgroundModes` mit `audio`
+(virtuelle Endpoints) und `bluetooth-central` (Bluetooth im Hintergrund),
+`NSBluetoothAlwaysUsageDescription`, `NSLocalNetworkUsageDescription` und
+`NSBonjourServices` mit `_apple-midi._udp`. Sandboxed macOS-Apps brauchen
+die Entitlements `com.apple.security.device.bluetooth`,
+`com.apple.security.network.client` und
+`com.apple.security.network.server`.
+
+## Verwendung
 
 `AppleMidiBackend` (Name `coremidi`) implementiert `MidiBackend` aus
-[aud_midi_core](https://github.com/audmidi/aud_midi_core):
+[aud_midi_core](https://github.com/audmidi/aud_midi_core). Das Beispiel
+listet die CoreMIDI-Ports, öffnet alle Eingänge und spielt eine
+MIDI-2.0-Note auf einer virtuellen Quelle, der andere Apps zuhören können:
+
+```dart
+import 'package:aud_midi_apple/aud_midi_apple.dart';
+import 'package:aud_midi_core/aud_midi_core.dart';
+import 'package:aud_midi_standard/aud_midi_standard.dart';
+
+// Lists the CoreMIDI ports, opens all inputs and plays a MIDI 2.0 note on a
+// virtual source that other apps can listen to. In apps, the engine of
+// aud_midi_core hosts the backend; this host just prints.
+Future<void> main() async {
+  final backend = AppleMidiBackend();
+  await backend.start(_PrintingHost());
+
+  for (final port in backend.ports) {
+    print(
+      '${port.id} ${port.direction.name} ${port.name} '
+      '(${port.transport.name}, ${port.protocol.name}, ${port.state.name})',
+    );
+    if (port.isInput) await backend.openPort(port.id);
+  }
+
+  final source = await backend.create(
+    MidiVirtualPortSpec(
+      name: 'aud_midi_apple example',
+      direction: MidiDirection.output,
+      protocol: MidiProtocol.midi2,
+    ),
+  );
+  // MIDI 2.0 Note On and Note Off of middle C on group 0, channel 0. A
+  // virtual source sends at once; the engine schedules for such ports.
+  const clock = MidiSystemClock();
+  await backend.send(
+    source.id,
+    MidiUmpPacket(words: const [0x40903c00, 0xc8000000], time: clock.now()),
+  );
+  await Future<void>.delayed(const Duration(milliseconds: 500));
+  await backend.send(
+    source.id,
+    MidiUmpPacket(words: const [0x40803c00, 0x00000000], time: clock.now()),
+  );
+
+  await Future<void>.delayed(const Duration(seconds: 1));
+  await backend.stop();
+}
+
+final class _PrintingHost implements MidiBackendHost {
+  @override
+  final MidiClock clock = const MidiSystemClock();
+
+  @override
+  void portsChanged(List<MidiPortEvent> events) => events.forEach(print);
+
+  @override
+  void received(MidiPortId port, MidiPacket packet) => print('$port $packet');
+
+  @override
+  void diagnostic(MidiDiagnostic diagnostic) => print(diagnostic);
+}
+```
+
+Der Ausschnitt läuft nur auf macOS und iOS; er ist
+[example/aud_midi_apple_example.dart](example/aud_midi_apple_example.dart).
+
+Auf iOS koppelt und verbindet der Bluetooth-MIDI-Gerätepicker des Systems
+ein Peripheriegerät; seine Ports erscheinen danach:
+
+```dart
+final picker = backend.bluetooth! as MidiBluetoothSystemPicker;
+await picker.showSystemDevicePicker(); // CABTMIDICentralViewController
+```
+
+## Einschränkungen
+
+- Kein Port meldet `cancelPending`: Das Backend ruft `MIDIFlushOutput` nie
+  auf, weil `MIDIFlushOutput(destination)` einem virtuellen Ziel einen
+  System Reset liefert (siehe Status); die Engine verwirft also nur ihre
+  eigene Software-Warteschlange, und Pakete, die schon bei CoreMIDI
+  liegen, werden gesendet.
+- `network` ist auf macOS null: `MIDINetworkSession` tut dort nichts,
+  `defaultSession` ist nil. macOS-Sessions richtet man im Audio-MIDI-Setup
+  ein, sie erscheinen als Ports, und das eigene AppleMIDI des Pakets lässt
+  sich mit `MidiBonjourAdvertiser` ankündigen.
+- `endpoint` und `functionBlocks` bleiben leer: `MIDIUMPEndpointManager`
+  (macOS 15, iOS 18) darf nur auf dem Haupt-Thread benutzt werden und
+  listete in einem Kommandozeilenprozess die UMP-Endpoints anderer
+  Prozesse nicht.
+- Auf macOS wirft der Bluetooth-Picker `MidiUnsupported`, ebenso
+  `showMidiBluetoothPickerNative` außerhalb von Apple-Plattformen, die
+  keinen Shim bauen; sein Parameter `present` ist optional.
+- Ein Tap, der nicht rechtzeitig zurückkehrt, behält seinen Slot und eine
+  Diagnose meldet es; der Slot wird nie freigegeben, solange ein Aufruf
+  ihn noch berühren könnte. Ein Datenaufruf, der den Slot belegt vorfindet,
+  verwirft seine Pakete und zählt sie, der Pfad nimmt also nie ein Lock;
+  `gone` geht nie verloren.
+- Der Shim weist andere Protokolle als 1 und 2 zurück, weil
+  `MIDIDestinationCreateWithProtocol` den Prozess bei ihnen abbricht.
+- Nicht geprüft: ein echtes BLE-MIDI-Peripheriegerät (keins vorhanden; in
+  `dart test` bricht ein `CBCentralManager` den Prozess mangels
+  Bluetooth-Nutzungsbeschreibung ab) und eine Netzwerk-Session mit echtem
+  Gegenüber. Ihre Logik ist mit Fakes getestet.
+
+## Dokumentation
+
+- [Der Plan der aud_midi-Familie](https://github.com/audmidi/aud_midi_pm/blob/main/doc/2026-Q4/tickets/2026-10-06-aud_midi_01-initial-midi-implementation.md)
+- [Guides](doc/guides/)
+
+## Funktionsweise
+
+```text
+MIDI isolate                     │ native threads
+AppleMidiBackend (logic)         │
+ ├─ MidiCoreMidi ── FFI ─────────┼─ C shim: run loop thread with all
+ │   (ffigen C bindings)         │  clients, receive blocks → ring buffer
+ │                               │  → NativeCallable.listener signal
+ ├─ MidiAppleBluetoothBackend    │
+ │   ├─ MidiCoreBluetooth ── ObjC bindings ── CBCentralManager (queue)
+ │   └─ showMidiBluetoothPickerNative ─ FFI ─ ObjC: CABTMIDICentralViewController (iOS)
+ └─ MidiAppleNetworkBackend      │
+     ├─ MidiAppleNetworkSession ── ObjC bindings ── MIDINetworkSession
+     └─ MidiBonjourBrowser ─ FFI ─┼─ C shim: DNS-SD on a dispatch queue
+```
+
+- `src/aud_midi_apple.c` betreibt einen CFRunLoop-Thread, auf dem er jeden
+  MIDI-Client erzeugt, denn CoreMIDI schickt Benachrichtigungen an den Run
+  Loop des erzeugenden Threads, und ein Dart-Prozess hat keinen. Er hält
+  einen Client, der nie freigegeben wird, weil das Freigeben des letzten
+  Clients die Verbindung zum MIDI-Server beenden kann.
+- Zwei Eingangsports je Client (MIDI 1.0 und MIDI 2.0). Der Receive-Block
+  kopiert jedes `MIDIEventPacket` mit dem Ref-Con der Quelle, Zeitstempel
+  und Ankunftszeit in einen Ringpuffer und signalisiert Dart; die
+  Leseseite ist lock-frei, die Schreiber reihen sich an einem
+  `os_unfair_lock` an. Bei Überlauf fällt die neueste Event-Liste weg und
+  zählt als `queueOverflow`-Diagnose.
+- `src/aud_midi_apple_tap.c` hält die Tap-Slots eines Clients, adressiert
+  über den Ref-Con der verbundenen Quelle: je Slot ein Zähler der laufenden
+  Aufrufe und ein Belegt-Flag, `gone`-Markierungen, die
+  128-Bit-Tick-Umrechnung und ein Probe-Tap für die Tests. Er weiß nichts
+  von CoreMIDI, deshalb lässt `scripts/test-native.js` seinen Test unter
+  ASan/UBSan, ThreadSanitizer und, mit LLVM aus Homebrew,
+  RealtimeSanitizer laufen (`node scripts/test-native.js`).
+- `src/aud_midi_apple_bluetooth_picker.m` zeigt den
+  `CABTMIDICentralViewController` in einem Navigation-Controller mit
+  Fertig-Button auf dem Haupt-Thread vom Key Window aus und signalisiert
+  Dart beim Schließen; `hook/build.dart` linkt CoreAudioKit und UIKit nur
+  auf iOS.
+- `stop()` löst die Taps, trennt und gibt frei, dann markiert der Shim den
+  Client als geschlossen und wartet, bis kein Callback mehr läuft, bevor
+  Dart den `NativeCallable` schließt.
+- Mach-Ticks werden zu Mikrosekunden (`mach_timebase_info`) und dann über
+  `MidiClockMapper` zur Paketuhr, neu abgeglichen alle 10 s und bei
+  Hotplug.
+- Die reine Dart-Logik spricht nur über `MidiCoreMidi`,
+  `MidiCoreBluetooth`, `MidiAppleNetworkSession`, `MidiBonjourBrowser` und
+  die Picker-Funktion mit der nativen Schicht; die Tests ersetzen sie durch
+  Fakes. Die nativen Implementierungen werden auf macOS gegen das echte
+  System getestet.
+- `hook/build.dart` übersetzt den Shim und die von ffigen erzeugten
+  Objective-C-Trampoline mit `native_toolchain_c` für macOS und iOS und
+  tut auf anderen Systemen nichts. CoreBluetooth wird zur Laufzeit
+  geladen, nicht gelinkt.
+
+Im Einzelnen:
 
 - Ports: Jede CoreMIDI-Quelle ist ein Eingang, jedes Ziel ein Ausgang,
   auch die virtuellen Endpoints anderer Apps und Geräte, die offline sind
@@ -32,10 +221,7 @@ Teil der aud_midi-Familie, siehe [aud_midi](https://github.com/audmidi/aud_midi)
   Jede Quelle hängt am MIDI-1.0- oder am MIDI-2.0-Eingangsport, je nach
   ihrem Protokoll, damit CoreMIDI nie übersetzt. Eingänge tragen die
   CoreMIDI-Zeitstempel auf der Paketuhr; künftige Pakete übernimmt der
-  CoreMIDI-Scheduler. Kein Port meldet `cancelPending`: Das Backend ruft
-  `MIDIFlushOutput` nie auf (siehe unten), die Engine verwirft also nur
-  ihre eigene Software-Warteschlange, und Pakete, die schon bei CoreMIDI
-  liegen, werden gesendet.
+  CoreMIDI-Scheduler.
 - Virtuelle Ports (`virtualPorts` ist das Backend selbst): Quellen und
   Ziele mit Protokoll, Unique ID, Hersteller, Modell und Gruppen.
 - Hotplug: CoreMIDI-Benachrichtigungen → Neu-Aufzählung → hinzugekommene,
@@ -51,11 +237,7 @@ Teil der aud_midi-Familie, siehe [aud_midi](https://github.com/audmidi/aud_midi)
   Lücke. Ein Tap hält die Quelle ohne Dart-Listener verbunden, bleibt
   angehängt, solange die Quelle weg ist, und folgt ihr zu ihrem neuen
   Endpoint; `detachNativeTap` kehrt zurück, nachdem der letzte Aufruf des
-  Taps zurückgekehrt ist, und gibt nie einen Slot frei, den ein Aufruf noch
-  berühren könnte (bei einem Timeout bleibt er belegt, eine Diagnose meldet
-  es). Ein Datenaufruf, der den Slot belegt vorfindet, verwirft seine
-  Pakete und zählt sie, der Pfad nimmt also nie ein Lock; `gone` geht nie
-  verloren.
+  Taps zurückgekehrt ist.
 - Bluetooth (macOS 13, iOS 16): nach dem BLE-MIDI-Service suchen,
   verbinden, `MIDIBluetoothDriverActivateAllConnections`, auf das
   CoreMIDI-Gerät warten, die CoreBluetooth-Verbindung beenden. Die
@@ -67,11 +249,13 @@ Teil der aud_midi-Familie, siehe [aud_midi](https://github.com/audmidi/aud_midi)
   aud_midi_core) Apples `CABTMIDICentralViewController`, der ohne diese
   Schritte koppelt und verbindet; `showMidiBluetoothPickerNative` übernimmt
   das Anzeigen, und der Parameter `bluetoothPicker` von `AppleMidiBackend`
-  ersetzt es, etwa in Tests. Auf macOS wirft der Picker `MidiUnsupported`,
-  ebenso `showMidiBluetoothPickerNative` außerhalb von Apple-Plattformen,
-  die keinen Shim bauen; sein Parameter `present` ist optional.
+  ersetzt es, etwa in Tests.
 - Netzwerk: `MIDINetworkSession` auf iOS; `browse()` über DNS-SD;
   `MidiBonjourAdvertiser` implementiert `MidiServiceAdvertiser`.
+
+## Status
+
+Vor 1.0 — die API kann sich zwischen Minor-Versionen ändern.
 
 Geprüft auf macOS 27 (Apple Silicon) mit echtem CoreMIDI, ohne Mocks:
 
@@ -107,11 +291,6 @@ der Keyboard-Session von Ticket 26 von aud_audio:
 | --- | --- |
 | Port offline und zurück (USB während eines gehaltenen Akkords ab- und wieder angesteckt) | still 25 ms, nachdem der Port offline ging; Eingabe spielte wieder 9 ms, nachdem er unter seiner ID zurückkam |
 
-Nicht geprüft: ein echtes BLE-MIDI-Peripheriegerät (keins vorhanden; in
-`dart test` bricht ein `CBCentralManager` den Prozess mangels
-Bluetooth-Nutzungsbeschreibung ab) und eine Netzwerk-Session mit echtem
-Gegenüber. Ihre Logik ist mit Fakes getestet.
-
 Erkenntnisse, die das Verhalten bestimmen:
 
 - Auf iOS ist `networkName` der Session nil, bis der MIDI-Server die
@@ -141,148 +320,27 @@ Erkenntnisse, die das Verhalten bestimmen:
 - `MIDIDestinationCreateWithProtocol` bricht den Prozess bei anderen
   Protokollen als 1 und 2 ab; der Shim weist sie zurück.
 
-## Installation
+## Mitwirken
 
-```bash
-dart pub add aud_midi_apple
-```
+Siehe [doc/guides/develop-guide.md](doc/guides/develop-guide.md).
 
-iOS-Apps tragen in `Info.plist` ein: `UIBackgroundModes` mit `audio`
-(virtuelle Endpoints) und `bluetooth-central` (Bluetooth im Hintergrund),
-`NSBluetoothAlwaysUsageDescription`, `NSLocalNetworkUsageDescription` und
-`NSBonjourServices` mit `_apple-midi._udp`. Sandboxed macOS-Apps brauchen
-die Entitlements `com.apple.security.device.bluetooth`,
-`com.apple.security.network.client` und
-`com.apple.security.network.server`.
-
-## Dokumentation
-
-- [Der Plan der aud_midi-Familie](https://github.com/audmidi/aud_midi_pm/blob/main/doc/2026-Q4/tickets/2026-10-06-aud_midi_01-initial-midi-implementation.md)
-- [Guides](doc/guides/)
-
-## Code-Beispiele
-
-```dart
-import 'package:aud_midi_apple/aud_midi_apple.dart';
-import 'package:aud_midi_core/aud_midi_core.dart';
-import 'package:aud_midi_standard/aud_midi_standard.dart';
-
-Future<void> main() async {
-  final backend = AppleMidiBackend();
-  await backend.start(_PrintingHost());
-
-  for (final port in backend.ports.where((port) => port.isInput)) {
-    await backend.openPort(port.id);
-  }
-
-  final source = await backend.create(
-    MidiVirtualPortSpec(
-      name: 'aud_midi_apple example',
-      direction: MidiDirection.output,
-      protocol: MidiProtocol.midi2,
-    ),
-  );
-  const clock = MidiSystemClock();
-  await backend.send(
-    source.id,
-    MidiUmpPacket(words: const [0x40903c00, 0xc8000000], time: clock.now()),
-  );
-  await backend.stop();
-}
-
-final class _PrintingHost implements MidiBackendHost {
-  @override
-  final MidiClock clock = const MidiSystemClock();
-
-  @override
-  void portsChanged(List<MidiPortEvent> events) => events.forEach(print);
-
-  @override
-  void received(MidiPortId port, MidiPacket packet) => print('$port $packet');
-
-  @override
-  void diagnostic(MidiDiagnostic diagnostic) => print(diagnostic);
-}
-```
-
-Auf iOS koppelt und verbindet der Bluetooth-MIDI-Gerätepicker des Systems
-ein Peripheriegerät; seine Ports erscheinen danach:
-
-```dart
-final picker = backend.bluetooth! as MidiBluetoothSystemPicker;
-await picker.showSystemDevicePicker(); // CABTMIDICentralViewController
-```
-
-Das vollständige Beispiel steht in [example/aud_midi_apple_example.dart](example/aud_midi_apple_example.dart).
-
-## Funktionsweise
-
-```text
-MIDI-Isolate                     │ native Threads
-AppleMidiBackend (Logik)         │
- ├─ MidiCoreMidi ── FFI ─────────┼─ C-Shim: Run-Loop-Thread mit allen
- │   (ffigen-C-Bindings)         │  Clients, Receive-Blocks → Ringpuffer
- │                               │  → Signal über NativeCallable.listener
- ├─ MidiAppleBluetoothBackend    │
- │   ├─ MidiCoreBluetooth ── ObjC-Bindings ── CBCentralManager (Queue)
- │   └─ showMidiBluetoothPickerNative ─ FFI ─ ObjC: CABTMIDICentralViewController (iOS)
- └─ MidiAppleNetworkBackend      │
-     ├─ MidiAppleNetworkSession ── ObjC-Bindings ── MIDINetworkSession
-     └─ MidiBonjourBrowser ─ FFI ─┼─ C-Shim: DNS-SD auf einer Dispatch-Queue
-```
-
-- `src/aud_midi_apple.c` betreibt einen CFRunLoop-Thread, auf dem er jeden
-  MIDI-Client erzeugt, denn CoreMIDI schickt Benachrichtigungen an den Run
-  Loop des erzeugenden Threads, und ein Dart-Prozess hat keinen. Er hält
-  einen Client, der nie freigegeben wird, weil das Freigeben des letzten
-  Clients die Verbindung zum MIDI-Server beenden kann.
-- Zwei Eingangsports je Client (MIDI 1.0 und MIDI 2.0). Der Receive-Block
-  kopiert jedes `MIDIEventPacket` mit dem Ref-Con der Quelle, Zeitstempel
-  und Ankunftszeit in einen Ringpuffer und signalisiert Dart; die
-  Leseseite ist lock-frei, die Schreiber reihen sich an einem
-  `os_unfair_lock` an. Bei Überlauf fällt die neueste Event-Liste weg und
-  zählt als `queueOverflow`-Diagnose.
-- `src/aud_midi_apple_tap.c` hält die Tap-Slots eines Clients, adressiert
-  über den Ref-Con der verbundenen Quelle: je Slot ein Zähler der laufenden
-  Aufrufe und ein Belegt-Flag, `gone`-Markierungen, die
-  128-Bit-Tick-Umrechnung und ein Probe-Tap für die Tests. Er weiß nichts
-  von CoreMIDI, deshalb lässt `scripts/test-native.js` seinen Test unter
-  ASan/UBSan, ThreadSanitizer und, mit LLVM aus Homebrew,
-  RealtimeSanitizer laufen (`node scripts/test-native.js`).
-- `src/aud_midi_apple_bluetooth_picker.m` zeigt den
-  `CABTMIDICentralViewController` in einem Navigation-Controller mit
-  Fertig-Button auf dem Haupt-Thread vom Key Window aus und signalisiert
-  Dart beim Schließen; `hook/build.dart` linkt CoreAudioKit und UIKit nur
-  auf iOS.
-- `stop()` löst die Taps, trennt und gibt frei, dann markiert der Shim den
-  Client als geschlossen und wartet, bis kein Callback mehr läuft, bevor
-  Dart den `NativeCallable` schließt.
-- Mach-Ticks werden zu Mikrosekunden (`mach_timebase_info`) und dann über
-  `MidiClockMapper` zur Paketuhr, neu abgeglichen alle 10 s und bei
-  Hotplug.
-- Die reine Dart-Logik spricht nur über `MidiCoreMidi`,
-  `MidiCoreBluetooth`, `MidiAppleNetworkSession`, `MidiBonjourBrowser` und
-  die Picker-Funktion mit der nativen Schicht; die Tests ersetzen sie durch
-  Fakes. Die nativen
-  Implementierungen werden auf macOS gegen das echte System getestet.
-- `hook/build.dart` übersetzt den Shim und die von ffigen erzeugten
-  Objective-C-Trampoline mit `native_toolchain_c` für macOS und iOS und
-  tut auf anderen Systemen nichts. CoreBluetooth wird zur Laufzeit
-  geladen, nicht gelinkt.
+### Bindings neu erzeugen
 
 Die Bindings nach Änderungen am Shim oder an den Konfigurationen neu
 erzeugen (ffigen 23 liest YAML noch, erklärt es aber für veraltet):
 
 ```bash
-dart run ffigen --config ffigen.yaml       # CoreMIDI, CoreFoundation, Shim
+dart run ffigen --config ffigen.yaml       # CoreMIDI, CoreFoundation, shim
 dart run ffigen --config ffigen_objc.yaml  # CoreBluetooth, MIDINetworkSession
 ```
+
+### Tests ausführen
 
 Tests, die die globale Netzwerk-Session ändern, laufen nur mit
 `AUD_MIDI_TEST_NETWORK=1`; `AUD_MIDI_REPORT=<Datei>` schreibt die
 gemessenen Loopback-Zeiten als JSON. `node scripts/check-notices.js` prüft
 die Lizenz-Header und `NOTICES.md`.
 
-## Mitwirken
+## Lizenz
 
-Siehe [doc/guides/develop-guide.md](doc/guides/develop-guide.md).
+MIT — siehe [LICENSE](LICENSE).

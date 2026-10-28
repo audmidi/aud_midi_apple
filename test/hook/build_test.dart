@@ -25,9 +25,9 @@ void main() {
       '-show-build',
       file.toFilePath(),
     ]);
-    return RegExp(
-      r'platform (\w+)',
-    ).firstMatch(result.stdout as String)!.group(1)!;
+    return RegExp(r'platform (\w+)')
+        .firstMatch(result.stdout as String)!
+        .group(1)!;
   }
 
   // Returns the libraries [file] links.

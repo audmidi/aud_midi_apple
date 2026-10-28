@@ -3,5 +3,6 @@
   "dnaCopyrightHolder": "Audanika",
   "dnaGitOrg": "audanika",
   "dnaJiraPrefix": "AUD",
-  "dnaGitOrgUrl": "https://github.com/audanika"
+  "dnaGitOrgUrl": "https://github.com/audanika",
+  "dnaGitQuickCheckPipelineName": "Quick Check"
 }

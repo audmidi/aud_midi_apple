@@ -22,9 +22,9 @@ dev_dependencies:
   test: ^1.33.0
 dependencies:
   aud_midi_core: ^0.2.0
-  aud_midi_standard: ^0.3.0
-  code_assets: ^2.1.0
+  aud_midi_standard: ^0.3.1
+  code_assets: ^2.2.0
   ffi: ^2.2.0
   hooks: ^2.2.0
-  native_toolchain_c: ^0.19.5
-  objective_c: ^9.6.2
+  native_toolchain_c: ^0.19.6
+  objective_c: ^9.6.4

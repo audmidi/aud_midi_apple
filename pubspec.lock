@@ -87,14 +87,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.19.1"
-  colorize:
-    dependency: transitive
-    description:
-      name: colorize
-      sha256: "584746cd6ba1cba0633b6720f494fe6f9601c4170f0666c1579d2aa2a61071ba"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.0.0"
   convert:
     dependency: transitive
     description:
@@ -247,62 +239,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.2.0"
-  gg_args:
-    dependency: transitive
-    description:
-      name: gg_args
-      sha256: aa52bf0322fa315ea552e092a236394edd6ce403edc2cc29776d81bf787c8294
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.2.0"
-  gg_capture_print:
-    dependency: transitive
-    description:
-      name: gg_capture_print
-      sha256: "3c35399877ccc15f8ea2e768064b1db847a4f71c303708ea1cd52d8934bc0417"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.2.1"
-  gg_console_colors:
-    dependency: transitive
-    description:
-      name: gg_console_colors
-      sha256: "587848a714df37ff255f18e8530b0dc7a49097c62e6692b91c70361ad4df6af2"
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.5.0"
-  gg_hash:
-    dependency: transitive
-    description:
-      name: gg_hash
-      sha256: abdfced31345e21f7bd105461db5544bf48c2ff288429e9dcd43fc693cfa2e28
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.3.0"
-  gg_json:
-    dependency: transitive
-    description:
-      name: gg_json
-      sha256: a6094996fcb1aa36f209060f0db1fefcd02fcd11649491763138331eb5dac253
-      url: "https://pub.dev"
-    source: hosted
-    version: "4.3.0"
-  gg_log:
-    dependency: transitive
-    description:
-      name: gg_log
-      sha256: dd0d9be07ff9b57e266771bb1cfd0f07f585019ccafe6543def6917a7acd7ae5
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.2.0"
-  gg_process:
-    dependency: transitive
-    description:
-      name: gg_process
-      sha256: e7f86750ff49a6515f85517a36b50979ab756f9b71858f4350d73c83b65bf7f0
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.4.1"
   glob:
     dependency: transitive
     description:
@@ -311,14 +247,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
-  helix:
-    dependency: "direct dev"
-    description:
-      name: helix
-      sha256: ef8f11569ff5d8e3c86b569c7a20598e266ea5d7ae8d8b24d82fbc1ad1c0e43a
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.14.0"
   hooks:
     dependency: "direct main"
     description:
@@ -391,14 +319,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.0"
-  mocktail:
-    dependency: transitive
-    description:
-      name: mocktail
-      sha256: "5e1bf53cc7baa8062a33b84424deb61513858ea05c601b8509e683815b5914aa"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.0.5"
   native_toolchain_c:
     dependency: "direct main"
     description:
@@ -479,14 +399,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.2.2"
-  recase:
-    dependency: transitive
-    description:
-      name: recase
-      sha256: e4eb4ec2dcdee52dcf99cb4ceabaffc631d7424ee55e56f280bc039737f89213
-      url: "https://pub.dev"
-    source: hosted
-    version: "4.1.0"
   record_use:
     dependency: transitive
     description:
@@ -680,4 +592,4 @@ packages:
     source: hosted
     version: "2.2.4"
 sdks:
-  dart: ">=3.13.0 <4.0.0"
+  dart: ">=3.14.0 <4.0.0"

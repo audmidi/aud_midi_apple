@@ -5,6 +5,7 @@
 ### Changed
 
 - Upgrade the dependencies
+- Require Flutter 3.50 and Dart 3.14, build the DNA
 
 ## 0.2.0 - 2026-10-28
 

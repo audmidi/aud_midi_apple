@@ -85,9 +85,9 @@
       "name": "dna-gg",
       "package": "dna_gg",
       "ecosystem": "pub",
-      "resolvedVersion": "1.1.0",
+      "resolvedVersion": "1.6.0",
       "via": "dna-audanika",
-      "hash": "0x8654064a14538e39"
+      "hash": "0xf809b20d01f13cce"
     },
     {
       "name": "dna-audanika",
@@ -123,7 +123,7 @@
     },
     {
       "path": ".claude/hooks/pm-prompts.mjs",
-      "hash": "0x988aed96a8073727"
+      "hash": "0x6b8fdf7bbbf7c1a5"
     },
     {
       "path": ".claude/settings.json",
@@ -139,7 +139,7 @@
     },
     {
       "path": ".claude/skills/gg-cleanup/SKILL.md",
-      "hash": "0x5cb74663151e486a"
+      "hash": "0x634921912309c933"
     },
     {
       "path": ".claude/skills/gg-commit/SKILL.md",
@@ -147,7 +147,7 @@
     },
     {
       "path": ".claude/skills/gg-publish/SKILL.md",
-      "hash": "0xcdef2684fcaaac5a"
+      "hash": "0x501ac99a5d586b58"
     },
     {
       "path": ".claude/skills/gg-push/SKILL.md",
@@ -155,11 +155,11 @@
     },
     {
       "path": ".claude/skills/gg-review/SKILL.md",
-      "hash": "0x9f7bbbe511238684"
+      "hash": "0x3a4506ccd5c8e1be"
     },
     {
       "path": ".claude/skills/gg-ticket/SKILL.md",
-      "hash": "0xbfbb8b9fd485f87c"
+      "hash": "0xa44f6e5ad54a6d0b"
     },
     {
       "path": ".claude/skills/gg/SKILL.md",
@@ -243,11 +243,11 @@
     },
     {
       "path": "doc/guides/develop-guide.md",
-      "hash": "0x47f238c48f3a3464"
+      "hash": "0x069177edfde873cf"
     },
     {
       "path": "doc/guides/develop-without-ai-guide.md",
-      "hash": "0x03ef3cff63e8bcc0"
+      "hash": "0x3162f038a02705b6"
     },
     {
       "path": "doc/guides/dna-guides-guide.md",
@@ -259,7 +259,7 @@
     },
     {
       "path": "doc/guides/for-ai/ai-dev-guide.md",
-      "hash": "0x9538998de60db966"
+      "hash": "0xd113faf9c159a549"
     },
     {
       "path": "doc/guides/for-ai/ai-review-guide.md",

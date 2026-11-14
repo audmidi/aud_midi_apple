@@ -47,8 +47,8 @@ void main() {
           mainMethod: build_hook.main,
           targetOS: os,
           targetIOSSdk: sdk,
-          targetIOSVersion: 15,
-          targetMacOSVersion: 12,
+          iOSDeploymentVersion: AppleVersion(15),
+          macOSDeploymentVersion: AppleVersion(12),
           targetArchitecture: architecture,
           check: (input, output) {
             final asset = output.assets.code.single;
